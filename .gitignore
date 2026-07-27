@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.idea/
+*.mp4
+*.avi
+*.h5
+*.npz
+logs/

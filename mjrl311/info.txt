@@ -1,0 +1,1 @@
+This is my mjrl version, which tries to be compatible with Python3.11 so that it can be used as part of the env_isaaclab1 framework1
