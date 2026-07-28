@@ -7,6 +7,9 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    pkg-config \
+    libhdf5-dev \
+    build-essential \
     libgl1 \
     libglib2.0-0 \
     libegl1 \
