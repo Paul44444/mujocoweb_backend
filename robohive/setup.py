@@ -61,7 +61,7 @@ setup(
         'ffmpeg',
         'absl-py',
         'torch',
-        'h5py==3.7.0',
+        'h5py>=3.10,<4',
         'pink-noise-rl',
         'gitpython'
     ],
