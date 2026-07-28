@@ -1,3 +1,5 @@
+cd ~/PycharmProjects/dapg
+
 cat > Dockerfile <<'EOF'
 FROM python:3.11-slim
 
@@ -6,7 +8,6 @@ ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# MuJoCo/OpenCV runtime libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
@@ -14,7 +15,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglfw3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the whole repository first, including ./robohive
 COPY . .
 
 RUN python -m pip install --upgrade pip setuptools wheel
