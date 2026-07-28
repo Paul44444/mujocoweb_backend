@@ -17,7 +17,6 @@ import os
 import cv2
 import queue
 
-
 #import mjrlpaul
 
 # Run this first to find the right module path
@@ -33,7 +32,6 @@ for importer, modname, ispkg in pkgutil.walk_packages(
         print(modname)
 
 
-_ = 1+1
 
 env_name = "relocate-v1"#"hammer-v1"#"FrankaReachRandom-v0"
 #policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/relocate-v0.pickle"
