@@ -1,0 +1,17 @@
+cat > .dockerignore <<'EOF'
+.git
+.gitignore.save
+__pycache__
+*.pyc
+*.pyo
+*.log
+.venv
+venv
+env
+dapg38
+.idea
+.vscode
+paultrain1/logs
+paultrain1A/logs
+paultrain1C/logs
+EOF
