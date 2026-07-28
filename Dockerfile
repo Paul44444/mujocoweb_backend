@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libhdf5-dev \
     build-essential \
+    python3-dev \
     libgl1 \
     libglib2.0-0 \
     libegl1 \
