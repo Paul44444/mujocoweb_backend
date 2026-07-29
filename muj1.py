@@ -148,7 +148,14 @@ def run_simulation(
     mode = "evaluation"
     camera_name_local = None
 
+    import os
+
+    os.environ.setdefault("MUJOCO_GL", "osmesa")
+    os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+
     import mujoco
+    import robohive
+    import robohive.envs.hands
     import numpy as np
     np.random.seed(seed)
 

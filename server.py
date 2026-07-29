@@ -5,6 +5,12 @@ import threading
 from typing import Any
 
 import cv2
+
+import os
+
+os.environ.setdefault("MUJOCO_GL", "osmesa")
+os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 

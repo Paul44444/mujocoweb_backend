@@ -3,14 +3,21 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DEBIAN_FRONTEND=noninteractive
+
 ENV GIT_PYTHON_GIT_EXECUTABLE=/usr/bin/git
+
+# Force headless CPU-based OpenGL rendering
+ENV MUJOCO_GL=osmesa
+ENV PYOPENGL_PLATFORM=osmesa
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ffmpeg \
     libgl1 \
+    libgl1-mesa-dri \
     libglib2.0-0 \
     libosmesa6 \
+    libosmesa6-dev \
     libegl1 \
     libglfw3 \
     && rm -rf /var/lib/apt/lists/*
