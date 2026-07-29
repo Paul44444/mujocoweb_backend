@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import threading
+import time
 import traceback
 from typing import Any
 
@@ -14,6 +15,41 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+
+def _integer_setting(
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        print(
+            f"Ignoring invalid {name}={raw_value!r}; using {default}",
+            flush=True,
+        )
+        return default
+    if not minimum <= value <= maximum:
+        print(
+            f"Ignoring out-of-range {name}={value}; using {default}",
+            flush=True,
+        )
+        return default
+    return value
+
+
+JPEG_QUALITY = _integer_setting("JPEG_QUALITY", 70, 1, 100)
+PERFORMANCE_LOG_INTERVAL = _integer_setting(
+    "PERFORMANCE_LOG_INTERVAL",
+    100,
+    1,
+    10_000,
+)
 
 app = FastAPI(title="MuJoCo Web Backend")
 
@@ -66,6 +102,8 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     simulation_error: list[str] = []
 
     frame_count = 0
+    jpeg_encode_seconds = 0.0
+    callback_started = time.perf_counter()
 
     def frame_callback(frame: Any, metadata: Any) -> None:
         """
@@ -74,7 +112,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
         Converts an RGB NumPy frame into JPEG bytes and stores only
         the newest frame in frame_queue.
         """
-        nonlocal frame_count
+        nonlocal frame_count, jpeg_encode_seconds
 
         try:
             if frame is None:
@@ -116,11 +154,13 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                     cv2.COLOR_RGB2BGR,
                 )
 
+            encode_started = time.perf_counter()
             success, encoded = cv2.imencode(
                 ".jpg",
                 frame_bgr,
-                [cv2.IMWRITE_JPEG_QUALITY, 80],
+                [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY],
             )
+            jpeg_encode_seconds += time.perf_counter() - encode_started
 
             if not success:
                 raise RuntimeError("OpenCV failed to encode JPEG frame")
@@ -141,9 +181,14 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                     },
                     flush=True,
                 )
-            elif frame_count % 100 == 0:
+            elif frame_count % PERFORMANCE_LOG_INTERVAL == 0:
+                elapsed = time.perf_counter() - callback_started
                 print(
-                    f"Processed {frame_count} rendered frames",
+                    "Frame processing performance:",
+                    f"produced_fps={frame_count / elapsed:.2f},",
+                    f"jpeg_avg_ms="
+                    f"{jpeg_encode_seconds * 1000 / frame_count:.2f},",
+                    f"jpeg_quality={JPEG_QUALITY}",
                     flush=True,
                 )
 
@@ -345,6 +390,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     )
 
     sent_frame_count = 0
+    send_started = time.perf_counter()
     empty_queue_count = 0
 
     try:
@@ -413,9 +459,12 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                     f"{len(jpeg_bytes)} bytes",
                     flush=True,
                 )
-            elif sent_frame_count % 100 == 0:
+            elif sent_frame_count % PERFORMANCE_LOG_INTERVAL == 0:
+                elapsed = time.perf_counter() - send_started
                 print(
-                    f"Sent {sent_frame_count} frames to browser",
+                    "WebSocket performance:",
+                    f"sent_fps={sent_frame_count / elapsed:.2f},",
+                    f"sent_frames={sent_frame_count}",
                     flush=True,
                 )
 

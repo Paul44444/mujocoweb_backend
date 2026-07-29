@@ -160,6 +160,46 @@ num_episodes = 1
 ENABLE_WEB_TEST = True
 
 
+def _integer_setting(
+    name,
+    default,
+    minimum,
+    maximum,
+):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        print(
+            f"Ignoring invalid {name}={raw_value!r}; using {default}",
+            flush=True,
+        )
+        return default
+    if not minimum <= value <= maximum:
+        print(
+            f"Ignoring out-of-range {name}={value}; using {default}",
+            flush=True,
+        )
+        return default
+    return value
+
+
+SIMULATION_WIDTH = _integer_setting(
+    "SIMULATION_WIDTH",
+    480,
+    160,
+    1920,
+)
+SIMULATION_HEIGHT = _integer_setting(
+    "SIMULATION_HEIGHT",
+    360,
+    120,
+    1080,
+)
+
+
 print(
     f"muj1.py: all module imports completed after "
     f"{time.perf_counter() - _muj1_import_start:.2f}s",
@@ -274,6 +314,15 @@ def run_simulation(
     simulation_start = time.perf_counter()
 
     print("run_simulation: started", flush=True)
+    print(
+        "run_simulation: video configuration:",
+        {
+            "width": SIMULATION_WIDTH,
+            "height": SIMULATION_HEIGHT,
+            "jpeg_quality": os.environ.get("JPEG_QUALITY", "70"),
+        },
+        flush=True,
+    )
 
     env_name_local = env_name
     policy_path_local = policy_path
@@ -644,8 +693,8 @@ def run_simulation(
             u=u,
             v=v,
             table_z=0.0,
-            image_width=640,
-            image_height=480,
+            image_width=SIMULATION_WIDTH,
+            image_height=SIMULATION_HEIGHT,
         )
 
         target_x = float(table_position[0])
@@ -701,7 +750,7 @@ def run_simulation(
             policy=pi,
             horizon=envw.spec.max_episode_steps,
             num_episodes=10,
-            frame_size=(640, 480),
+            frame_size=(SIMULATION_WIDTH, SIMULATION_HEIGHT),
             mode=mode,
             output_dir="./",
             filename="web_test",

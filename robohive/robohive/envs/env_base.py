@@ -707,7 +707,6 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
             - return resulting paths
         """
         exp_t0 = timer.time()
-
         if render == 'onscreen':
             self.mujoco_render_frames = True
         elif render == 'offscreen':
@@ -805,6 +804,13 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
         trace = Trace(self.id+"_rollouts")
 
         exp_t0 = timer.time()
+        try:
+            performance_log_interval = int(
+                os.environ.get("PERFORMANCE_LOG_INTERVAL", "100")
+            )
+        except ValueError:
+            performance_log_interval = 100
+        performance_log_interval = max(1, performance_log_interval)
 
         if render == 'onscreen':
             self.mujoco_render_frames = True
@@ -819,6 +825,11 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
 
             # initialize -----------------------------
             ep_t0 = timer.time()
+            policy_seconds = 0.0
+            render_seconds = 0.0
+            callback_seconds = 0.0
+            trace_seconds = 0.0
+            physics_seconds = 0.0
             group_key='Trial'+str(ep); trace.create_group(group_key)
             prompt(f"Episode {ep}", end=":> ", type=Prompt.INFO)
             obs = self.reset()
@@ -840,16 +851,20 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
                 
                 # print(t, t*self.dt, self.time, t*self.dt-self.time)
                 # Get step's actions ----------------------
+                stage_started = timer.perf_counter()
                 act = policy.get_action(obs[:39])[0] if mode == 'exploration' else policy.get_action(obs[:39])[1]['evaluation']
+                policy_seconds += timer.perf_counter() - stage_started
 
                 # Render an RGB frame for MP4 recording and/or live streaming.
                 if render == 'offscreen' or frame_callback is not None:
+                    stage_started = timer.perf_counter()
                     curr_frame = self.sim.renderer.render_offscreen(
                         width=frame_size[0],
                         height=frame_size[1],
                         camera_id=camera_name,
                         device_id=device_id,
                     )
+                    render_seconds += timer.perf_counter() - stage_started
 
                     # Preserve the existing MP4 recording behavior.
                     if render == 'offscreen':
@@ -858,6 +873,7 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
 
                     # Give the current RGB NumPy frame to an external consumer.
                     if frame_callback is not None:
+                        stage_started = timer.perf_counter()
                         frame_callback(
                             curr_frame,
                             {
@@ -868,8 +884,10 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
                                 "done": bool(done),
                             },
                         )
+                        callback_seconds += timer.perf_counter() - stage_started
                         
                 # log values at time=t ----------------------------------
+                stage_started = timer.perf_counter()
                 datum_dict = dict(
                         time=self.time,
                         observations=obs,
@@ -879,12 +897,30 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
                         done=done,
                     )
                 trace.append_datums(group_key=group_key, dataset_key_val=datum_dict)
+                trace_seconds += timer.perf_counter() - stage_started
 
 
                 # step env using actions from t=>t+1 ----------------------
+                stage_started = timer.perf_counter()
                 obs, rwd, done, *_, env_info = self.step(act, update_exteroception=True)
+                physics_seconds += timer.perf_counter() - stage_started
                 t = t+1
                 ep_rwd += rwd
+
+                if t % performance_log_interval == 0:
+                    elapsed = timer.time() - ep_t0
+                    print(
+                        "Simulation performance: "
+                        f"episode={ep}, steps={t}, "
+                        f"fps={t / elapsed:.2f}, "
+                        f"policy_avg_ms={policy_seconds * 1000 / t:.2f}, "
+                        f"physics_avg_ms={physics_seconds * 1000 / t:.2f}, "
+                        f"render_avg_ms={render_seconds * 1000 / t:.2f}, "
+                        f"jpeg_callback_avg_ms="
+                        f"{callback_seconds * 1000 / t:.2f}, "
+                        f"trace_avg_ms={trace_seconds * 1000 / t:.2f}",
+                        flush=True,
+                    )
 
             # record last step and finalize the rollout --------------------------------
             act = np.nan*np.ones(self.action_space.shape)
