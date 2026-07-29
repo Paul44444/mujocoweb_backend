@@ -34,7 +34,15 @@ for importer, modname, ispkg in pkgutil.walk_packages(
 
 env_name = "relocate-v1"#"hammer-v1"#"FrankaReachRandom-v0"
 #policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/relocate-v0.pickle"
-policy_path = "/home/paul/PycharmProjects/dapg/paultrain1/iterations/best_policy.pickle"#best_policy.pickle"
+
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parent
+policy_path = (
+    PROJECT_ROOT
+    / "paultrain1"
+    / "iterations"
+    / "best_policy.pickle"
+)#best_policy.pickle"
 #policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/policy_paul70rl.pickle"
 
 # Development settings
@@ -169,7 +177,7 @@ def run_simulation(
 
 
 
-    
+
     envw = gym.make(env_name_local)
     env = envw.unwrapped
     env.seed(seed)
