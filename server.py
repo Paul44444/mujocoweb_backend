@@ -274,18 +274,26 @@ async def simulation_websocket(websocket: WebSocket) -> None:
         print("Simulation worker entered", flush=True)
     
         try:
+            
+            import time
+            
             print(
                 "Importing MuJoCo simulation code...",
                 flush=True,
             )
-    
-            # Deliberately import here rather than at the top of server.py.
+            
+            import_started = time.perf_counter()
+            
             from muj1 import run_simulation
-    
+            
+            import_duration = time.perf_counter() - import_started
+            
             print(
-                "MuJoCo simulation code imported",
+                f"MuJoCo simulation code imported in "
+                f"{import_duration:.2f} seconds",
                 flush=True,
             )
+            
             print(
                 "Calling run_simulation()",
                 flush=True,
