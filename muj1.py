@@ -7,48 +7,164 @@ Source  :: https://github.com/vikashplus/robohive
 License :: Under Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
 ================================================= """
 
-from robohive.utils import gym
-from robohive.utils.paths_utils import plot as plotnsave_paths
-import click
-import numpy as np
-import pickle
-import time
+import faulthandler
 import os
-import cv2
+import pickle
 import queue
+import sys
+import time
+from contextlib import contextmanager
 
-#import mjrlpaul
+# These must be set before importing MuJoCo, RoboHive, or PyOpenGL.
+os.environ.setdefault("MUJOCO_GL", "osmesa")
+os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
-# Run this first to find the right module path
+_muj1_import_start = time.perf_counter()
+
+print("muj1.py: import started", flush=True)
+
+faulthandler.enable()
+
+
+def _memory_usage() -> str:
+    """Return Linux process memory counters without adding a dependency."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as status_file:
+            values = {}
+            for line in status_file:
+                key, separator, value = line.partition(":")
+                if separator and key in {"VmRSS", "VmSize"}:
+                    values[key] = value.strip()
+        return ", ".join(
+            f"{key}={values.get(key, 'unknown')}"
+            for key in ("VmRSS", "VmSize")
+        )
+    except OSError:
+        return "memory counters unavailable"
+
+
+@contextmanager
+def _diagnose_stall(label: str, timeout_seconds: int = 30):
+    """
+    Emit Python thread stacks if a native/import operation stops responding.
+
+    Render can otherwise show only the log line immediately before the stall.
+    """
+    started = time.perf_counter()
+    print(f"CHECKPOINT START: {label} ({_memory_usage()})", flush=True)
+    faulthandler.dump_traceback_later(
+        timeout_seconds,
+        repeat=True,
+        file=sys.stderr,
+    )
+    try:
+        yield
+    except BaseException as exc:
+        print(
+            f"CHECKPOINT FAILED: {label}: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        raise
+    else:
+        print(
+            f"CHECKPOINT DONE: {label} in "
+            f"{time.perf_counter() - started:.2f}s "
+            f"({_memory_usage()})",
+            flush=True,
+        )
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+print("muj1.py: importing NumPy...", flush=True)
+import numpy as np
+print(
+    f"muj1.py: NumPy imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
+
+
+print("muj1.py: importing OpenCV...", flush=True)
+import cv2
+print(
+    f"muj1.py: OpenCV imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
+
+print("muj1.py: importing torch...", flush=True)
+with _diagnose_stall("import torch"):
+    import torch
+print(
+    f"muj1.py: torch imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
+
+print("muj1.py: importing MuJoCo...", flush=True)
+with _diagnose_stall("import mujoco"):
+    import mujoco
+print(
+    f"muj1.py: MuJoCo imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
+
+
+print("muj1.py: importing RoboHive gym...", flush=True)
+from robohive.utils import gym
+print(
+    f"muj1.py: RoboHive gym imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
+
+
+print("muj1.py: importing RoboHive environments...", flush=True)
+
+# This import registers the RoboHive hand environments,
+# including relocate-v1.
 import robohive
 import robohive.envs.hands
-import pkgutil
 
-for importer, modname, ispkg in pkgutil.walk_packages(
-    path=robohive.__path__,
-    prefix='robohive.',
-    onerror=lambda x: None
-):
-    if 'polic' in modname.lower() or 'gaussian' in modname.lower() or 'npg' in modname.lower():
-        print(modname)
+print(
+    f"muj1.py: RoboHive environments imported after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
 
-env_name = "relocate-v1"#"hammer-v1"#"FrankaReachRandom-v0"
-#policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/relocate-v0.pickle"
 
-from pathlib import Path
-PROJECT_ROOT = Path(__file__).resolve().parent
-policy_path = (
-    PROJECT_ROOT
-    / "paultrain1"
-    / "iterations"
-    / "best_policy.pickle"
-)#best_policy.pickle"
-#policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/policy_paul70rl.pickle"
+# This import is only used by the old plotting code below.
+# Keep it so the rest of your file continues to work unchanged.
+from robohive.utils.paths_utils import plot as plotnsave_paths
+
+
+env_name = "relocate-v1"
+
+MODULE_DIRECTORY = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+policy_path = os.path.join(
+    MODULE_DIRECTORY,
+    "paultrain1",
+    "iterations",
+    "best_policy.pickle",
+)
 
 # Development settings
 render = "none"
 num_episodes = 1
 ENABLE_WEB_TEST = True
+
+
+print(
+    f"muj1.py: all module imports completed after "
+    f"{time.perf_counter() - _muj1_import_start:.2f}s",
+    flush=True,
+)
 
 DESC = '''
 Helper script to examine an environment and associated policy for behaviors; \n
@@ -67,18 +183,31 @@ class Dummy(object):
 
 class PolicyUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
-        print(f"pickle wants: {module}.{name}")   # <-- add this
-        
-        #redirect mjrl → robohive equivalent
-        if False and module.startswith("mjrl"):
-            module = module.replace("mjrl", "mjrlpaul")#"robohive")
-        #try:
-        #    return super().find_class(module, name)
-        #except Exception:
-        #    return Dummy  # fallback for unknown classes
-        
-        return super().find_class(module, name)
+        print(
+            f"PolicyUnpickler: requesting {module}.{name}",
+            flush=True,
+        )
 
+        class_load_start = time.perf_counter()
+
+        try:
+            loaded_class = super().find_class(module, name)
+        except Exception as exc:
+            print(
+                f"PolicyUnpickler: FAILED to load "
+                f"{module}.{name}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            raise
+
+        print(
+            f"PolicyUnpickler: loaded {module}.{name} in "
+            f"{time.perf_counter() - class_load_start:.2f}s",
+            flush=True,
+        )
+
+        return loaded_class
 # Random policy
 class rand_policy():
     def __init__(self, env, seed):
@@ -142,28 +271,37 @@ def run_simulation(
     frame_callback=None,
     target_queue=None,
 ):
+    simulation_start = time.perf_counter()
+
+    print("run_simulation: started", flush=True)
+
     env_name_local = env_name
     policy_path_local = policy_path
     seed = 123
     mode = "evaluation"
     camera_name_local = None
 
-    import os
-
-    os.environ.setdefault("MUJOCO_GL", "osmesa")
-    os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
-
+    print("run_simulation: importing MuJoCo...", flush=True)
     import mujoco
-    import robohive
-    import robohive.envs.hands
-    import numpy as np
+
+    print(
+        f"run_simulation: MuJoCo imported after "
+        f"{time.perf_counter() - simulation_start:.2f}s",
+        flush=True,
+    )
+
     np.random.seed(seed)
 
-
-
-
-    print("RoboHive loaded from:", robohive.__file__, flush=True)
-    print("Requested environment:", repr(env_name_local), flush=True)
+    print(
+        "RoboHive loaded from:",
+        robohive.__file__,
+        flush=True,
+    )
+    print(
+        "Requested environment:",
+        repr(env_name_local),
+        flush=True,
+    )
 
     try:
         registered_ids = sorted(gym.envs.registry.keys())
@@ -182,13 +320,23 @@ def run_simulation(
         flush=True,
     )
 
+    print(
+        f"run_simulation: creating environment "
+        f"{env_name_local!r}...",
+        flush=True,
+    )
 
-
+    environment_start = time.perf_counter()
 
     envw = gym.make(env_name_local)
     env = envw.unwrapped
     env.seed(seed)
 
+    print(
+        f"run_simulation: environment created in "
+        f"{time.perf_counter() - environment_start:.2f}s",
+        flush=True,
+    )
     print("\n=== MuJoCo bodies ===")
     
     for body_id in range(env.sim.model.nbody):
@@ -305,8 +453,56 @@ def run_simulation(
     env.sim.model.cam_fovy[camera_id] = 30.0
 
     # Load the trained policy.
-    policy_l = open(policy_path_local, "rb")
-    pi = PolicyUnpickler(policy_l).load()
+    # Load the trained policy.
+    print(
+        "run_simulation: loading policy from:",
+        policy_path_local,
+        flush=True,
+    )
+
+    if not os.path.isfile(policy_path_local):
+        raise FileNotFoundError(
+            "Policy file was not found: "
+            f"{policy_path_local!r}. "
+            "This path must exist inside the Render Docker container."
+        )
+
+    policy_load_start = time.perf_counter()
+
+    # Resolve the policy class before entering pickle.  The old final log line
+    # came from find_class(), immediately before this import was attempted.
+    with _diagnose_stall("import mjrlpaul"):
+        import mjrlpaul
+    print(
+        "run_simulation: mjrlpaul imported from:",
+        mjrlpaul.__file__,
+        flush=True,
+    )
+
+    with _diagnose_stall(
+        "import mjrlpaul.policies.gaussian_mlp.MLP"
+    ):
+        from mjrlpaul.policies.gaussian_mlp import MLP
+    print(
+        "run_simulation: policy class imported:",
+        f"{MLP.__module__}.{MLP.__name__}",
+        flush=True,
+    )
+
+    print("run_simulation: opening policy pickle", flush=True)
+    with open(policy_path_local, "rb") as policy_file:
+        print(
+            "run_simulation: policy pickle opened; reconstructing policy",
+            flush=True,
+        )
+        with _diagnose_stall("unpickle policy"):
+            pi = PolicyUnpickler(policy_file).load()
+
+    print(
+        f"run_simulation: policy reconstructed in "
+        f"{time.perf_counter() - policy_load_start:.2f}s",
+        flush=True,
+    )
 
     import inspect
 
@@ -481,24 +677,40 @@ def run_simulation(
         the current episode is retained for the next episode reset.
         """
 
+        if metadata.get("episode") == 0 and metadata.get("step") == 0:
+            # The first frame proves policy evaluation and OSMesa rendering
+            # both returned, so the pre-frame stall watchdog is no longer
+            # needed while the remaining rollout continues.
+            faulthandler.cancel_dump_traceback_later()
+            print(
+                "run_simulation: first frame callback called",
+                flush=True,
+            )
+
         read_latest_browser_target()
 
         if frame_callback is not None:
             frame_callback(frame, metadata)
 
-    paths = env.examine_policy_new(
-        policy=pi,
-        horizon=envw.spec.max_episode_steps,
-        num_episodes=10,
-        frame_size=(640, 480),
-        mode=mode,
-        output_dir="./",
-        filename="web_test",
-        camera_name=camera_name_local,
-        render="none",
-        frame_callback=interactive_frame_callback,
-        episode_reset_callback=browser_episode_reset_callback,
-    )
+    print("run_simulation: starting examine_policy_new()", flush=True)
+    with _diagnose_stall(
+        "examine_policy_new before first frame",
+        timeout_seconds=30,
+    ):
+        paths = env.examine_policy_new(
+            policy=pi,
+            horizon=envw.spec.max_episode_steps,
+            num_episodes=10,
+            frame_size=(640, 480),
+            mode=mode,
+            output_dir="./",
+            filename="web_test",
+            camera_name=camera_name_local,
+            render="none",
+            frame_callback=interactive_frame_callback,
+            episode_reset_callback=browser_episode_reset_callback,
+        )
+    print("run_simulation: examine_policy_new() returned", flush=True)
 
     # evaluate paths
     success_percentage = env.evaluate_success(paths)
