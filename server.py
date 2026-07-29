@@ -15,9 +15,6 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from muj1 import run_simulation
-
-
 app = FastAPI(title="MuJoCo Web Backend")
 
 app.add_middleware(
@@ -268,43 +265,64 @@ async def simulation_websocket(websocket: WebSocket) -> None:
 
     def simulation_worker() -> None:
         """
-        Run MuJoCo outside the asyncio event loop.
+        Import and run the heavy MuJoCo/RoboHive code only after
+        the browser has opened the WebSocket connection.
+    
+        This allows Uvicorn to start quickly and bind Render's port
+        before RoboHive and Torch are imported.
         """
         print("Simulation worker entered", flush=True)
-        print("Calling run_simulation()", flush=True)
-
+    
         try:
+            print(
+                "Importing MuJoCo simulation code...",
+                flush=True,
+            )
+    
+            # Deliberately import here rather than at the top of server.py.
+            from muj1 import run_simulation
+    
+            print(
+                "MuJoCo simulation code imported",
+                flush=True,
+            )
+            print(
+                "Calling run_simulation()",
+                flush=True,
+            )
+    
             run_simulation(
                 frame_callback=frame_callback,
                 target_queue=target_queue,
             )
-
+    
             print(
                 "run_simulation() returned normally",
                 flush=True,
             )
-
+    
         except Exception as exc:
             error_message = (
                 f"{type(exc).__name__}: {exc}"
             )
-
+    
             simulation_error.append(error_message)
-
+    
             print(
                 "Simulation worker crashed:",
                 error_message,
                 flush=True,
             )
             traceback.print_exc()
-
+    
         finally:
             simulation_finished.set()
+    
             print(
                 "Simulation worker finished",
                 flush=True,
             )
-
+    
     simulation_thread = threading.Thread(
         target=simulation_worker,
         name="mujoco-simulation-thread",
