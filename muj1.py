@@ -21,6 +21,7 @@ import queue
 
 # Run this first to find the right module path
 import robohive
+import robohive.envs.hands
 import pkgutil
 
 for importer, modname, ispkg in pkgutil.walk_packages(
@@ -30,8 +31,6 @@ for importer, modname, ispkg in pkgutil.walk_packages(
 ):
     if 'polic' in modname.lower() or 'gaussian' in modname.lower() or 'npg' in modname.lower():
         print(modname)
-
-
 
 env_name = "relocate-v1"#"hammer-v1"#"FrankaReachRandom-v0"
 #policy_path = "/home/paul/PycharmProjects/dapg/hand_dapg/dapg/policies/relocate-v0.pickle"
@@ -145,6 +144,32 @@ def run_simulation(
     import numpy as np
     np.random.seed(seed)
 
+
+
+
+    print("RoboHive loaded from:", robohive.__file__, flush=True)
+    print("Requested environment:", repr(env_name_local), flush=True)
+
+    try:
+        registered_ids = sorted(gym.envs.registry.keys())
+    except AttributeError:
+        registered_ids = sorted(
+            spec.id for spec in gym.envs.registry.values()
+        )
+
+    print(
+        "Registered relocate environments:",
+        [
+            environment_id
+            for environment_id in registered_ids
+            if "relocate" in environment_id.lower()
+        ],
+        flush=True,
+    )
+
+
+
+    
     envw = gym.make(env_name_local)
     env = envw.unwrapped
     env.seed(seed)
