@@ -50,6 +50,7 @@ def _integer_setting(
 
 
 JPEG_QUALITY = _integer_setting("JPEG_QUALITY", 70, 1, 100)
+STREAM_FPS = _integer_setting("STREAM_FPS", 30, 1, 60)
 PERFORMANCE_LOG_INTERVAL = _integer_setting(
     "PERFORMANCE_LOG_INTERVAL",
     100,
@@ -464,6 +465,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
 
     sent_frame_count = 0
     send_started = time.perf_counter()
+    last_frame_sent_at = 0.0
     empty_queue_count = 0
 
     try:
@@ -526,6 +528,11 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             await websocket.send_bytes(jpeg_bytes)
 
             sent_frame_count += 1
+            elapsed_since_last_frame = time.perf_counter() - last_frame_sent_at
+            minimum_frame_interval = 1.0 / STREAM_FPS
+            if elapsed_since_last_frame < minimum_frame_interval:
+                await asyncio.sleep(minimum_frame_interval - elapsed_since_last_frame)
+            last_frame_sent_at = time.perf_counter()
 
             if sent_frame_count == 1:
                 print(

@@ -24,6 +24,10 @@ in `.env.example`. For a CPU-only recovery start, run:
 MUJOCO_GL=osmesa ./run-local.sh
 ```
 
+The local profile renders at 960x720 with JPEG quality 85 and streams at up to
+30 FPS. These values can be overridden in `.env`. Render continues to use its
+lower built-in defaults unless the same variables are configured there.
+
 Verify it locally at `http://127.0.0.1:8000`. Binding only to loopback is
 intentional: the tunnel can reach it, while the router cannot expose it
 directly.
