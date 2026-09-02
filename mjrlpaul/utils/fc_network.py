@@ -39,7 +39,7 @@ class FCNetwork(nn.Module):
     def forward(self, x):
         # TODO(Aravind): Remove clamping to CPU
         # This is a temp change that should be fixed shortly
-        xclipped = x[:, :39]
+        xclipped = x[:, :self.obs_dim]
         
         if xclipped.is_cuda:
             out = xclipped.to('cpu')

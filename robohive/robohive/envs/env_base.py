@@ -852,7 +852,7 @@ class MujocoEnv(gym.Env, gym.utils.EzPickle, ObsVecDict):
                 # print(t, t*self.dt, self.time, t*self.dt-self.time)
                 # Get step's actions ----------------------
                 stage_started = timer.perf_counter()
-                act = policy.get_action(obs[:39])[0] if mode == 'exploration' else policy.get_action(obs[:39])[1]['evaluation']
+                act = policy.get_action(obs)[0] if mode == 'exploration' else policy.get_action(obs)[1]['evaluation']
                 policy_seconds += timer.perf_counter() - stage_started
 
                 # Render an RGB frame for MP4 recording and/or live streaming.

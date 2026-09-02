@@ -141,18 +141,52 @@ print(
 from robohive.utils.paths_utils import plot as plotnsave_paths
 
 
-env_name = "relocate-v1"
-
 MODULE_DIRECTORY = os.path.dirname(
     os.path.abspath(__file__)
 )
 
-policy_path = os.path.join(
-    MODULE_DIRECTORY,
-    "paultrain1",
-    "iterations",
-    "best_policy.pickle",
-)
+TASKS = {
+    "relocate": {
+        "environment": "relocate-v1",
+        "policy": os.path.join(
+            MODULE_DIRECTORY, "paultrain1", "iterations", "best_policy.pickle"
+        ),
+        "interactive_target": True,
+    },
+    "hammer": {
+        "environment": "hammer-v1",
+        "environment_kwargs": {
+            "obs_keys": [
+                "hand_jnt", "obj_vel", "palm_pos", "obj_pos",
+                "obj_rot", "target_pos", "nail_impact",
+            ],
+        },
+        "policy": os.path.join(
+            MODULE_DIRECTORY, "hand_dapg", "dapg", "policies", "hammer-v0.pickle"
+        ),
+        "interactive_target": False,
+    },
+    "door": {
+        "environment": "door-v1",
+        "environment_kwargs": {
+            "obs_keys": [
+                "hand_jnt", "latch_pos", "door_pos", "palm_pos",
+                "handle_pos", "reach_err", "door_open",
+            ],
+        },
+        "policy": os.path.join(
+            MODULE_DIRECTORY, "hand_dapg", "dapg", "policies", "door-v0.pickle"
+        ),
+        "interactive_target": False,
+    },
+    "pen": {
+        "environment": "pen-v1",
+        "policy": os.path.join(
+            MODULE_DIRECTORY, "hand_dapg", "dapg", "policies", "pen-v0.pickle"
+        ),
+        "interactive_target": False,
+    },
+}
 
 # Development settings
 render = "none"
@@ -223,6 +257,11 @@ class Dummy(object):
 
 class PolicyUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
+        # The published DAPG checkpoints use the original ``mjrl`` package
+        # name. This repository carries the compatible implementation as
+        # ``mjrlpaul`` so both old and newly trained policies can be loaded.
+        if module == "mjrl" or module.startswith("mjrl."):
+            module = "mjrlpaul" + module[len("mjrl"):]
         print(
             f"PolicyUnpickler: requesting {module}.{name}",
             flush=True,
@@ -310,6 +349,7 @@ def test_frame_callback(frame, metadata):
 def run_simulation(
     frame_callback=None,
     target_queue=None,
+    task_id="relocate",
 ):
     simulation_start = time.perf_counter()
 
@@ -324,8 +364,12 @@ def run_simulation(
         flush=True,
     )
 
-    env_name_local = env_name
-    policy_path_local = policy_path
+    if task_id not in TASKS:
+        raise ValueError(f"Unknown simulation task: {task_id!r}")
+
+    task = TASKS[task_id]
+    env_name_local = task["environment"]
+    policy_path_local = task["policy"]
     seed = 123
     mode = "evaluation"
     camera_name_local = None
@@ -360,11 +404,11 @@ def run_simulation(
         )
 
     print(
-        "Registered relocate environments:",
+        "Registered DAPG environments:",
         [
             environment_id
             for environment_id in registered_ids
-            if "relocate" in environment_id.lower()
+            if any(name in environment_id.lower() for name in TASKS)
         ],
         flush=True,
     )
@@ -377,7 +421,10 @@ def run_simulation(
 
     environment_start = time.perf_counter()
 
-    envw = gym.make(env_name_local)
+    envw = gym.make(
+        env_name_local,
+        **task.get("environment_kwargs", {}),
+    )
     env = envw.unwrapped
     env.seed(seed)
 
@@ -428,11 +475,14 @@ def run_simulation(
         "camera",
     )
     
-    env.sim.model.cam_pos[camera_id] = np.array([
-        0.0,
-        -2.0,
-        2.0,
-    ])
+    # The relocation view benefits from a wider, higher camera. Keep the
+    # model-authored fixed camera for the other tasks.
+    if task_id == "relocate":
+        env.sim.model.cam_pos[camera_id] = np.array([
+            0.0,
+            -2.0,
+            2.0,
+        ])
 
     env.sim.model.cam_fovy[camera_id] = 32.0
 
@@ -676,6 +726,9 @@ def run_simulation(
         the object for a new episode.
         """
 
+        if not task["interactive_target"]:
+            return
+
         target = read_latest_browser_target()
 
         if target is None:
@@ -757,7 +810,11 @@ def run_simulation(
             camera_name=camera_name_local,
             render="none",
             frame_callback=interactive_frame_callback,
-            episode_reset_callback=browser_episode_reset_callback,
+            episode_reset_callback=(
+                browser_episode_reset_callback
+                if task["interactive_target"]
+                else None
+            ),
         )
     print("run_simulation: examine_policy_new() returned", flush=True)
 

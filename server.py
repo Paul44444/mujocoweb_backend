@@ -53,6 +53,8 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 
 app = FastAPI(title="MuJoCo Web Backend")
 
+AVAILABLE_TASKS = {"relocate", "hammer", "door", "pen"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -77,6 +79,17 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     print("WebSocket connection attempt received", flush=True)
 
     await websocket.accept()
+
+    task_id = websocket.query_params.get("task", "relocate").lower()
+    if task_id not in AVAILABLE_TASKS:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": f"Unknown simulation task: {task_id}",
+            }
+        )
+        await websocket.close(code=1008)
+        return
 
     print("Browser connected to simulation WebSocket", flush=True)
     print(
@@ -347,6 +360,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             run_simulation(
                 frame_callback=frame_callback,
                 target_queue=target_queue,
+                task_id=task_id,
             )
     
             print(
@@ -398,6 +412,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             {
                 "type": "status",
                 "status": "simulation_started",
+                "task": task_id,
             }
         )
 
