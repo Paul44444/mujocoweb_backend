@@ -64,14 +64,23 @@ GENERATION_LIMIT = 12
 GENERATION_WINDOW_SECONDS = 60 * 60
 
 AVAILABLE_TASKS = {"relocate", "hammer", "door", "pen"}
+DEFAULT_FRONTEND_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://mujocoweb.vercel.app",
+)
+frontend_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "FRONTEND_ORIGINS",
+        ",".join(DEFAULT_FRONTEND_ORIGINS),
+    ).split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://mujocoweb.vercel.app",
-    ],
+    allow_origins=frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

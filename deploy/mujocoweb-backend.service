@@ -1,0 +1,23 @@
+[Unit]
+Description=MuJoCo Web CPU Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paul
+Group=paul
+WorkingDirectory=/home/paul/PycharmProjects/dapg
+EnvironmentFile=-/home/paul/PycharmProjects/dapg/.env
+Environment=MUJOCO_GL=osmesa
+Environment=PYOPENGL_PLATFORM=osmesa
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=OMP_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+ExecStart=/home/paul/miniconda3/envs/dapg38/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
