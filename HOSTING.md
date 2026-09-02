@@ -17,14 +17,21 @@ Start the backend on the loopback interface:
 ./run-local.sh
 ```
 
+Local hosting uses NVIDIA EGL rendering by default. CUDA device `0` is selected
+in `.env.example`. For a CPU-only recovery start, run:
+
+```bash
+MUJOCO_GL=osmesa ./run-local.sh
+```
+
 Verify it locally at `http://127.0.0.1:8000`. Binding only to loopback is
 intentional: the tunnel can reach it, while the router cannot expose it
 directly.
 
 ## 2. Persistent startup
 
-The file `deploy/mujocoweb-backend.service` is a ready-to-use systemd unit for
-this computer. Install and enable it with:
+The file `deploy/mujocoweb-backend.service` is a ready-to-use GPU-enabled
+systemd unit for this computer. Install and enable it with:
 
 ```bash
 sudo cp deploy/mujocoweb-backend.service /etc/systemd/system/

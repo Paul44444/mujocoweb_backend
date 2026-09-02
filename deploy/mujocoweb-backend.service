@@ -9,9 +9,9 @@ User=paul
 Group=paul
 WorkingDirectory=/home/paul/PycharmProjects/dapg
 EnvironmentFile=-/home/paul/PycharmProjects/dapg/.env
-Environment=MUJOCO_GL=osmesa
-Environment=PYOPENGL_PLATFORM=osmesa
-Environment=CUDA_VISIBLE_DEVICES=
+Environment=MUJOCO_GL=egl
+Environment=PYOPENGL_PLATFORM=egl
+Environment=CUDA_VISIBLE_DEVICES=0
 Environment=OMP_NUM_THREADS=1
 Environment=MKL_NUM_THREADS=1
 ExecStart=/home/paul/miniconda3/envs/dapg38/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000

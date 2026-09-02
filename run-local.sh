@@ -11,10 +11,15 @@ if [[ -f .env ]]; then
     set +a
 fi
 
-# Force one consistent headless CPU renderer. Inheriting MUJOCO_GL=egl while
-# setting PyOpenGL to OSMesa makes MuJoCo fail during import.
-export MUJOCO_GL="osmesa"
-export PYOPENGL_PLATFORM="osmesa"
+# Use the NVIDIA GPU locally by default and keep MuJoCo/PyOpenGL consistent.
+# Start with `MUJOCO_GL=osmesa ./run-local.sh` for a CPU-only fallback.
+RENDERING_PLATFORM="${MUJOCO_GL:-egl}"
+if [[ "$RENDERING_PLATFORM" != "egl" && "$RENDERING_PLATFORM" != "osmesa" ]]; then
+    printf 'Unsupported MUJOCO_GL=%s (use egl or osmesa)\n' "$RENDERING_PLATFORM" >&2
+    exit 2
+fi
+export MUJOCO_GL="$RENDERING_PLATFORM"
+export PYOPENGL_PLATFORM="$RENDERING_PLATFORM"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
