@@ -11,8 +11,10 @@ if [[ -f .env ]]; then
     set +a
 fi
 
-export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
-export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-osmesa}"
+# Force one consistent headless CPU renderer. Inheriting MUJOCO_GL=egl while
+# setting PyOpenGL to OSMesa makes MuJoCo fail during import.
+export MUJOCO_GL="osmesa"
+export PYOPENGL_PLATFORM="osmesa"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
