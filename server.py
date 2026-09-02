@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import asyncio
+from collections import defaultdict, deque
 import json
 import os
 import queue
 import threading
 import time
 import traceback
-from typing import Any
+from typing import Any, Dict
 
 # These must be set before importing MuJoCo, RoboHive, or muj1.
 os.environ.setdefault("MUJOCO_GL", "osmesa")
@@ -13,8 +16,11 @@ os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from object_generator import generate_object, validate_object_spec
 
 
 def _integer_setting(
@@ -52,6 +58,10 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 )
 
 app = FastAPI(title="MuJoCo Web Backend")
+generation_requests = defaultdict(deque)
+generation_lock = threading.Lock()
+GENERATION_LIMIT = 12
+GENERATION_WINDOW_SECONDS = 60 * 60
 
 AVAILABLE_TASKS = {"relocate", "hammer", "door", "pen"}
 
@@ -60,8 +70,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        # Add your Vercel frontend URL here later, for example:
-        # "https://your-project.vercel.app",
+        "https://mujocoweb.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -70,8 +79,34 @@ app.add_middleware(
 
 
 @app.get("/")
-def root() -> dict[str, str]:
+def root() -> Dict[str, str]:
     return {"status": "MuJoCo backend is running"}
+
+
+class ObjectPrompt(BaseModel):
+    description: str
+
+
+@app.post("/api/objects/generate")
+def generate_simulation_object(prompt: ObjectPrompt, request: Request) -> Dict[str, Any]:
+    client_id = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    if not client_id:
+        client_id = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with generation_lock:
+        requests = generation_requests[client_id]
+        while requests and requests[0] <= now - GENERATION_WINDOW_SECONDS:
+            requests.popleft()
+        if len(requests) >= GENERATION_LIMIT:
+            raise HTTPException(status_code=429, detail="Generation limit reached. Please try again later.")
+        requests.append(now)
+    try:
+        return generate_object(prompt.description)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        print(f"Object generation error: {exc}", flush=True)
+        raise HTTPException(status_code=502, detail="The AI could not create an object right now. Please try again.") from exc
 
 
 @app.websocket("/ws/simulation")
@@ -90,6 +125,20 @@ async def simulation_websocket(websocket: WebSocket) -> None:
         )
         await websocket.close(code=1008)
         return
+
+    object_spec = None
+    raw_object_spec = websocket.query_params.get("object")
+    if raw_object_spec:
+        if task_id != "relocate" or len(raw_object_spec) > 8_000:
+            await websocket.send_json({"type": "error", "message": "Custom objects are currently supported only for Relocate."})
+            await websocket.close(code=1008)
+            return
+        try:
+            object_spec = validate_object_spec(json.loads(raw_object_spec))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            await websocket.send_json({"type": "error", "message": f"Invalid custom object: {exc}"})
+            await websocket.close(code=1008)
+            return
 
     print("Browser connected to simulation WebSocket", flush=True)
     print(
@@ -361,6 +410,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                 frame_callback=frame_callback,
                 target_queue=target_queue,
                 task_id=task_id,
+                object_spec=object_spec,
             )
     
             print(

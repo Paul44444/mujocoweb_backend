@@ -13,6 +13,8 @@ import pickle
 import queue
 import sys
 import time
+import tempfile
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 
 # These must be set before importing MuJoCo, RoboHive, or PyOpenGL.
@@ -188,6 +190,59 @@ TASKS = {
     },
 }
 
+
+def _generated_relocate_model(object_spec):
+    source_path = os.path.join(
+        MODULE_DIRECTORY, "robohive", "robohive", "envs", "hands",
+        "assets", "DAPG_relocate.xml",
+    )
+    tree = ET.parse(source_path)
+    object_body = tree.find(".//body[@name='Object']")
+    if object_body is None:
+        raise ValueError("Relocation object body was not found")
+    for child in list(object_body):
+        if child.tag in {"geom", "inertial"}:
+            object_body.remove(child)
+
+    lowest_point = 0.0
+    for index, part in enumerate(object_spec["parts"]):
+        shape = part["shape"]
+        size = part["size"]
+        if shape == "sphere":
+            mj_size = [size[0]]
+            extent_z = size[0]
+        elif shape in {"capsule", "cylinder"}:
+            mj_size = [size[0], size[1]]
+            extent_z = size[0] + size[1]
+        else:
+            mj_size = size
+            extent_z = size[2]
+        position = part["position"]
+        lowest_point = min(lowest_point, position[2] - extent_z)
+        ET.SubElement(object_body, "geom", {
+            "name": f"generated_part_{index}",
+            "type": shape,
+            "size": " ".join(f"{value:.6g}" for value in mj_size),
+            "pos": " ".join(f"{value:.6g}" for value in position),
+            "euler": " ".join(f"{value:.6g}" for value in part["euler"]),
+            "rgba": " ".join(f"{value:.6g}" for value in part["rgba"]),
+            "mass": f"{part['mass']:.6g}",
+            "condim": "4",
+        })
+    body_position = [float(v) for v in object_body.get("pos", "0 0 0.035").split()]
+    body_position[2] = max(0.01, -lowest_point + 0.003)
+    object_body.set("pos", " ".join(f"{value:.6g}" for value in body_position))
+
+    model_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".xml", prefix="generated_relocate_",
+        dir=os.path.dirname(source_path), delete=False, encoding="utf-8",
+    )
+    try:
+        tree.write(model_file, encoding="unicode", xml_declaration=True)
+        return model_file.name
+    finally:
+        model_file.close()
+
 # Development settings
 render = "none"
 num_episodes = 1
@@ -350,6 +405,7 @@ def run_simulation(
     frame_callback=None,
     target_queue=None,
     task_id="relocate",
+    object_spec=None,
 ):
     simulation_start = time.perf_counter()
 
@@ -421,10 +477,19 @@ def run_simulation(
 
     environment_start = time.perf_counter()
 
-    envw = gym.make(
-        env_name_local,
-        **task.get("environment_kwargs", {}),
-    )
+    environment_kwargs = dict(task.get("environment_kwargs", {}))
+    generated_model_path = None
+    if object_spec is not None:
+        generated_model_path = _generated_relocate_model(object_spec)
+        environment_kwargs["model_path"] = generated_model_path
+    try:
+        envw = gym.make(env_name_local, **environment_kwargs)
+    finally:
+        if generated_model_path:
+            try:
+                os.unlink(generated_model_path)
+            except OSError:
+                pass
     env = envw.unwrapped
     env.seed(seed)
 
