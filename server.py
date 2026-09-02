@@ -169,6 +169,8 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     target_queue: queue.Queue[
         dict[str, float]
     ] = queue.Queue(maxsize=1)
+    control_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=64)
+    pause_event = threading.Event()
 
     simulation_finished = threading.Event()
     simulation_error: list[str] = []
@@ -326,7 +328,41 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                 traceback.print_exc()
                 return
 
-            if data.get("type") != "set_target":
+            command_type = data.get("type")
+
+            if command_type == "set_paused":
+                if data.get("paused") is True:
+                    pause_event.set()
+                elif data.get("paused") is False:
+                    pause_event.clear()
+                continue
+
+            if command_type == "camera_reset":
+                try:
+                    control_queue.put_nowait({"type": "camera_reset"})
+                except queue.Full:
+                    pass
+                continue
+
+            if command_type in {"camera_orbit", "camera_zoom"}:
+                try:
+                    if command_type == "camera_orbit":
+                        command = {
+                            "type": command_type,
+                            "delta_x": max(-100.0, min(100.0, float(data["deltaX"]))),
+                            "delta_y": max(-100.0, min(100.0, float(data["deltaY"]))),
+                        }
+                    else:
+                        command = {
+                            "type": command_type,
+                            "delta": max(-1.0, min(1.0, float(data["delta"]))),
+                        }
+                    control_queue.put_nowait(command)
+                except (KeyError, TypeError, ValueError, queue.Full):
+                    pass
+                continue
+
+            if command_type != "set_target":
                 print(
                     "Ignoring unknown browser command:",
                     data,
@@ -419,6 +455,8 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             run_simulation(
                 frame_callback=frame_callback,
                 target_queue=target_queue,
+                control_queue=control_queue,
+                pause_event=pause_event,
                 task_id=task_id,
                 object_spec=object_spec,
             )
@@ -578,6 +616,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
         traceback.print_exc()
 
     finally:
+        pause_event.clear()
         receiver_task.cancel()
 
         try:

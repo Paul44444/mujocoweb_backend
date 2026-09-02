@@ -404,6 +404,8 @@ def test_frame_callback(frame, metadata):
 def run_simulation(
     frame_callback=None,
     target_queue=None,
+    control_queue=None,
+    pause_event=None,
     task_id="relocate",
     object_spec=None,
 ):
@@ -533,88 +535,25 @@ def run_simulation(
 
     print("=== End MuJoCo model information ===\n")
 
-    camera_name_local = "fixed"
+    camera_defaults = {
+        "azimuth": 90.0,
+        "elevation": -35.0,
+        "distance": 2.35,
+        "lookat": np.array([0.0, -0.12, 0.18]),
+    }
+    interactive_camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultCamera(interactive_camera)
 
-    camera_id = env.sim.model.name2id(
-        camera_name_local,
-        "camera",
-    )
-    
-    # The relocation view benefits from a wider, higher camera. Keep the
-    # model-authored fixed camera for the other tasks.
-    if task_id == "relocate":
-        env.sim.model.cam_pos[camera_id] = np.array([
-            0.0,
-            -2.0,
-            2.0,
-        ])
+    def reset_camera():
+        interactive_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        interactive_camera.azimuth = camera_defaults["azimuth"]
+        interactive_camera.elevation = camera_defaults["elevation"]
+        interactive_camera.distance = camera_defaults["distance"]
+        interactive_camera.lookat[:] = camera_defaults["lookat"]
 
-    env.sim.model.cam_fovy[camera_id] = 32.0
-
-    print("\n=== Active camera configuration ===")
-    print("Camera name:", camera_name_local)
-    print("Camera ID:", camera_id)
-    print("Camera position:", env.sim.model.cam_pos[camera_id])
-    print("Camera quaternion:", env.sim.model.cam_quat[camera_id])
-    print("Camera FOV:", env.sim.model.cam_fovy[camera_id])
-    print("=== End camera configuration ===\n")
-
-    env.sim.model.cam_fovy[camera_id] = 30.0
-    print(
-        "Final camera configuration:",
-        {
-            "position": env.sim.model.cam_pos[camera_id].copy(),
-            "quaternion": env.sim.model.cam_quat[camera_id].copy(),
-            "fovy": float(env.sim.model.cam_fovy[camera_id]),
-        },
-    )
-
-    ##AA
-
-    print("Available cameras:")
-    
-    for camera_id in range(env.sim.model.ncam):
-        try:
-            camera_name = env.sim.model.id2name(
-                camera_id,
-                "camera",
-            )
-        except Exception:
-            camera_name = None
-    
-        print(
-            camera_id,
-            camera_name,
-            "position:",
-            env.sim.model.cam_pos[camera_id],
-            "fovy:",
-            env.sim.model.cam_fovy[camera_id],
-        )
-
-    ##AA
-
-    try:
-        camera_id = env.sim.model.name2id(
-            camera_name_local,
-            "camera",
-        )
-    except Exception as exc:
-        raise ValueError(
-            f"Camera '{camera_name_local}' was not found"
-        ) from exc
-
-    print("Camera ID:", camera_id)
-    print(
-        "Original camera position:",
-        env.sim.model.cam_pos[camera_id].copy(),
-    )
-    print(
-        "Original camera field of view:",
-        env.sim.model.cam_fovy[camera_id],
-    )
-
-    # Smaller value = stronger zoom.
-    env.sim.model.cam_fovy[camera_id] = 30.0
+    reset_camera()
+    camera_name_local = interactive_camera
+    print("Interactive orbit camera initialized", camera_defaults, flush=True)
 
     # Load the trained policy.
     # Load the trained policy.
@@ -712,25 +651,22 @@ def run_simulation(
         by intersecting a camera ray with the horizontal table plane.
         """
 
-        callback_sim = env.sim
-        callback_sim.forward()
-
-        camera_position = (
-            callback_sim.data.cam_xpos[camera_id]
-            .copy()
-        )
-
-        camera_rotation = (
-            callback_sim.data.cam_xmat[camera_id]
-            .reshape(3, 3)
-            .copy()
-        )
+        azimuth = np.deg2rad(interactive_camera.azimuth)
+        elevation = np.deg2rad(interactive_camera.elevation)
+        camera_position = interactive_camera.lookat + interactive_camera.distance * np.array([
+            np.cos(elevation) * np.cos(azimuth),
+            -np.cos(elevation) * np.sin(azimuth),
+            -np.sin(elevation),
+        ])
+        forward = interactive_camera.lookat - camera_position
+        forward /= np.linalg.norm(forward)
+        right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
 
         aspect_ratio = image_width / image_height
 
-        vertical_fov = np.deg2rad(
-            callback_sim.model.cam_fovy[camera_id]
-        )
+        vertical_fov = np.deg2rad(45.0)
 
         half_height = np.tan(vertical_fov / 2.0)
         half_width = aspect_ratio * half_height
@@ -742,14 +678,18 @@ def run_simulation(
             [
                 image_x,
                 image_y,
-                -1.0,
+                1.0,
             ],
             dtype=np.float64,
         )
 
         ray_camera /= np.linalg.norm(ray_camera)
 
-        ray_world = camera_rotation @ ray_camera
+        ray_world = (
+            right * ray_camera[0]
+            + up * ray_camera[1]
+            + forward * ray_camera[2]
+        )
         ray_world /= np.linalg.norm(ray_world)
 
         if abs(ray_world[2]) < 1e-8:
@@ -836,6 +776,35 @@ def run_simulation(
             f"z={object_z:.4f}",
         )
     
+    def apply_camera_commands():
+        changed = False
+        if control_queue is None:
+            return changed
+        while True:
+            try:
+                command = control_queue.get_nowait()
+            except queue.Empty:
+                break
+            if command["type"] == "camera_orbit":
+                interactive_camera.azimuth -= command["delta_x"] * 0.25
+                interactive_camera.elevation = float(np.clip(
+                    interactive_camera.elevation - command["delta_y"] * 0.2,
+                    -85.0,
+                    -5.0,
+                ))
+                changed = True
+            elif command["type"] == "camera_zoom":
+                interactive_camera.distance = float(np.clip(
+                    interactive_camera.distance * (1.12 ** command["delta"]),
+                    0.45,
+                    5.0,
+                ))
+                changed = True
+            elif command["type"] == "camera_reset":
+                reset_camera()
+                changed = True
+        return changed
+
     def interactive_frame_callback(frame, metadata):
         """
         Forward rendered frames to server.py.
@@ -855,9 +824,21 @@ def run_simulation(
             )
 
         read_latest_browser_target()
+        apply_camera_commands()
 
         if frame_callback is not None:
             frame_callback(frame, metadata)
+
+        while pause_event is not None and pause_event.is_set():
+            if apply_camera_commands() and frame_callback is not None:
+                paused_frame = env.sim.renderer.render_offscreen(
+                    width=SIMULATION_WIDTH,
+                    height=SIMULATION_HEIGHT,
+                    camera_id=interactive_camera,
+                    device_id=0,
+                )
+                frame_callback(paused_frame, {**metadata, "paused": True})
+            time.sleep(0.03)
 
     print("run_simulation: starting examine_policy_new()", flush=True)
     with _diagnose_stall(
