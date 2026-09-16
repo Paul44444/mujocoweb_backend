@@ -17,10 +17,10 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +29,7 @@ REPOSITORIES = {
     "live-robohive": Path("/home/paul/robohive"),
 }
 BACKUP_DIR = Path(os.environ.get("EDITOR_BACKUP_DIR", "/home/paul/.local/share/mujocoweb-editor-backups"))
+SCENE_DIR = Path(os.environ.get("MUJOCOWEB_SCENE_DIR", "/home/paul/.local/share/mujocoweb-scenes"))
 MAX_CONTENT_BYTES = 150_000
 MAX_TREE_FILES = 2_000
 EDITABLE_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".xml", ".yaml", ".yml"}
@@ -48,6 +49,19 @@ class RestoreRequest(BaseModel):
     expected_sha256: str
 
 
+class SceneAsset(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,47}$")
+    asset: str = Field(pattern=r"^(box|sphere|cylinder|hammer)$")
+    position: List[float] = Field(min_length=3, max_length=3)
+    rotation: List[float] = Field(min_length=3, max_length=3)
+    scale: List[float] = Field(min_length=3, max_length=3)
+
+
+class SceneRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,47}$")
+    assets: List[SceneAsset] = Field(default_factory=list, max_length=100)
+
+
 def _authorize(authorization: Optional[str]) -> None:
     token = os.environ.get("EDITOR_TOKEN", "")
     if len(token) < 32:
@@ -55,6 +69,12 @@ def _authorize(authorization: Optional[str]) -> None:
     supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
     if not hmac.compare_digest(supplied, token):
         raise HTTPException(status_code=401, detail="Invalid editor password", headers={"WWW-Authenticate": "Bearer"})
+
+
+def _scene_path(name: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,47}", name):
+        raise HTTPException(status_code=400, detail="Invalid scene name")
+    return SCENE_DIR / f"{name}.json"
 
 
 def _file(file_id: str) -> Tuple[Path, str]:
@@ -208,6 +228,40 @@ def _restart_service() -> None:
 def get_repository_tree(authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
     return {"roots": _repository_tree()}
+
+
+@router.get("/scenes")
+def list_scenes(authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    if not SCENE_DIR.is_dir():
+        return {"scenes": []}
+    return {"scenes": sorted(path.stem for path in SCENE_DIR.glob("*.json"))}
+
+
+@router.get("/scenes/{name}")
+def get_scene(name: str, authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    path = _scene_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Scene not found")
+    try:
+        return SceneRequest.parse_raw(path.read_text(encoding="utf-8")).dict()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Stored scene is invalid") from exc
+
+
+@router.put("/scenes/{name}")
+def save_scene(name: str, request: SceneRequest, authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    if request.name != name:
+        raise HTTPException(status_code=400, detail="Scene name does not match URL")
+    if len({asset.id for asset in request.assets}) != len(request.assets):
+        raise HTTPException(status_code=400, detail="Asset IDs must be unique")
+    path = _scene_path(name)
+    SCENE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(request.json(indent=2), encoding="utf-8")
+    path.chmod(0o600)
+    return {"name": name, "assets": len(request.assets)}
 
 
 @router.get("/definitions")
