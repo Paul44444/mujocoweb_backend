@@ -20,6 +20,12 @@ a prior revision. Source writes are atomic, require the current revision hash,
 and reject invalid Python/XML syntax. After a change, the local systemd user
 service restarts automatically, so the next simulation loads the new code.
 
+The password-protected Backend logs panel shows the last 120 lines from the
+local `mujocoweb-backend.service` journal, including Python `print()` output.
+It refreshes every three seconds while open. It does not show Render logs or
+separate training jobs. `run-local.sh` uses unbuffered Python output so new
+prints appear promptly.
+
 **Security warning:** Anyone with the editor token can run arbitrary Python
 as the `paul` user on this computer. A syntax check does not detect malicious
 code. There is no AI security gate, and one would not make this safe. Keep the

@@ -27,6 +27,7 @@ export SIMULATION_WIDTH="${SIMULATION_WIDTH:-960}"
 export SIMULATION_HEIGHT="${SIMULATION_HEIGHT:-720}"
 export JPEG_QUALITY="${JPEG_QUALITY:-85}"
 export STREAM_FPS="${STREAM_FPS:-30}"
+export PYTHONUNBUFFERED=1
 
 PYTHON_EXECUTABLE="${MUJOCOWEB_PYTHON:-/home/paul/miniconda3/envs/dapg38/bin/python}"
 exec "$PYTHON_EXECUTABLE" -m uvicorn server:app \

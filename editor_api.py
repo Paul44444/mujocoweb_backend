@@ -12,6 +12,7 @@ import hmac
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import threading
 import time
@@ -153,6 +154,27 @@ def list_files(authorization: Optional[str] = Header(default=None)) -> dict:
             for file_id, (path, description) in FILES.items()
         ]
     }
+
+
+@router.get("/logs")
+def get_backend_logs(authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    try:
+        result = subprocess.run(
+            ["journalctl", "--user", "--unit=mujocoweb-backend.service",
+             "--lines=120", "--no-pager", "--output=short-iso"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=503, detail="Backend logs are unavailable") from exc
+    if result.returncode != 0:
+        raise HTTPException(status_code=503, detail="Backend logs are unavailable")
+    return {"logs": result.stdout[-60_000:]}
 
 
 @router.get("/files/{file_id}")
