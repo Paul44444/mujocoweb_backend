@@ -205,7 +205,7 @@ def get_backend_logs(authorization: Optional[str] = Header(default=None)) -> dic
     return {"logs": result.stdout[-500_000:]}
 
 
-@router.get("/files/{file_id}")
+@router.get("/files/{file_id:path}")
 def get_file(file_id: str, authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
     path, description = _file(file_id)
@@ -227,7 +227,7 @@ def get_file(file_id: str, authorization: Optional[str] = Header(default=None)) 
     }
 
 
-@router.put("/files/{file_id}")
+@router.put("/files/{file_id:path}")
 def save_file(
     file_id: str,
     request: SaveRequest,
@@ -249,7 +249,7 @@ def save_file(
     return {"sha256": _sha(request.content), "restarting": True}
 
 
-@router.post("/files/{file_id}/restore")
+@router.post("/files/restore/{file_id:path}")
 def restore_file(
     file_id: str,
     request: RestoreRequest,
