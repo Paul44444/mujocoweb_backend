@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,12 @@ REPOSITORIES = {
 }
 BACKUP_DIR = Path(os.environ.get("EDITOR_BACKUP_DIR", "/home/paul/.local/share/mujocoweb-editor-backups"))
 SCENE_DIR = Path(os.environ.get("MUJOCOWEB_SCENE_DIR", "/home/paul/.local/share/mujocoweb-scenes"))
+SCENE_ASSETS = [
+    {"id": "cube", "name": "Cube", "asset": "box", "scale": [0.04, 0.04, 0.04]},
+    {"id": "sphere", "name": "Sphere", "asset": "sphere", "scale": [0.04, 0.04, 0.04]},
+    {"id": "cylinder", "name": "Cylinder", "asset": "cylinder", "scale": [0.03, 0.03, 0.06]},
+    {"id": "hammer", "name": "Hammer", "asset": "hammer", "scale": [1.0, 1.0, 1.0]},
+]
 MAX_CONTENT_BYTES = 150_000
 MAX_TREE_FILES = 2_000
 EDITABLE_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".xml", ".yaml", ".yml"}
@@ -75,6 +82,16 @@ def _scene_path(name: str) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,47}", name):
         raise HTTPException(status_code=400, detail="Invalid scene name")
     return SCENE_DIR / f"{name}.json"
+
+
+def _ensure_starter_scene() -> None:
+    path = _scene_path("DAPG Relocate Start")
+    if path.exists():
+        return
+    SCENE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(json.dumps(SceneRequest(name="DAPG Relocate Start", assets=[
+        SceneAsset(id="training-cube", asset="box", position=[0.0, 0.0, 0.035], rotation=[0.0, 0.0, 0.0], scale=[0.03, 0.03, 0.03]),
+    ]).model_dump(), indent=2), encoding="utf-8")
 
 
 def _file(file_id: str) -> Tuple[Path, str]:
@@ -233,9 +250,16 @@ def get_repository_tree(authorization: Optional[str] = Header(default=None)) -> 
 @router.get("/scenes")
 def list_scenes(authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
+    _ensure_starter_scene()
     if not SCENE_DIR.is_dir():
         return {"scenes": []}
     return {"scenes": sorted(path.stem for path in SCENE_DIR.glob("*.json"))}
+
+
+@router.get("/scene-assets")
+def list_scene_assets(authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    return {"assets": SCENE_ASSETS}
 
 
 @router.get("/scenes/{name}")
@@ -259,7 +283,7 @@ def save_scene(name: str, request: SceneRequest, authorization: Optional[str] = 
         raise HTTPException(status_code=400, detail="Asset IDs must be unique")
     path = _scene_path(name)
     SCENE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text(request.json(indent=2), encoding="utf-8")
+    path.write_text(json.dumps(request.model_dump(), indent=2), encoding="utf-8")
     path.chmod(0o600)
     return {"name": name, "assets": len(request.assets)}
 
