@@ -24,30 +24,15 @@ from pydantic import BaseModel
 
 
 ROOT = Path(__file__).resolve().parent
-FILES = {
-    "live-relocate-environment": (
-        Path("/home/paul/robohive/robohive/envs/hands/relocate_v1.py"),
-        "Live Relocate environment and rewards",
-    ),
-    "live-relocate-scene": (
-        Path("/home/paul/robohive/robohive/envs/hands/assets/DAPG_relocate.xml"),
-        "Live default MuJoCo scene and robot model",
-    ),
-    "custom-object-template": (
-        ROOT / "robohive/robohive/envs/hands/assets/DAPG_relocate.xml",
-        "Scene template used when generating a custom object",
-    ),
-    "simulation": (
-        ROOT / "muj1.py",
-        "Web simulation and rendering",
-    ),
-    "training": (
-        ROOT / "mjrlpaul/utils/train_agent.py",
-        "Training code; does not change the running demo",
-    ),
+REPOSITORIES = {
+    "dapg": ROOT,
+    "live-robohive": Path("/home/paul/robohive"),
 }
 BACKUP_DIR = Path(os.environ.get("EDITOR_BACKUP_DIR", "/home/paul/.local/share/mujocoweb-editor-backups"))
 MAX_CONTENT_BYTES = 150_000
+MAX_TREE_FILES = 2_000
+EDITABLE_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".xml", ".yaml", ".yml"}
+IGNORED_DIRECTORIES = {".git", ".mypy_cache", ".pytest_cache", ".venv", "__pycache__", "logs", "iterations"}
 REVISION_PATTERN = re.compile(r"^[0-9]{14}-[0-9a-f]{12}$")
 router = APIRouter(prefix="/api/editor", tags=["editor"])
 write_lock = threading.Lock()
@@ -73,10 +58,58 @@ def _authorize(authorization: Optional[str]) -> None:
 
 
 def _file(file_id: str) -> Tuple[Path, str]:
-    result = FILES.get(file_id)
-    if result is None:
+    root_id, separator, relative_path = file_id.partition(":")
+    root = REPOSITORIES.get(root_id)
+    if not separator or root is None or not relative_path:
         raise HTTPException(status_code=404, detail="Unknown editor file")
-    return result
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Unknown editor file") from exc
+    if not candidate.is_file() or candidate.suffix.lower() not in EDITABLE_SUFFIXES:
+        raise HTTPException(status_code=404, detail="Unknown or non-editable file")
+    if candidate.stat().st_size > MAX_CONTENT_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 150 KB editor limit")
+    return candidate, f"{root_id}/{relative_path}"
+
+
+def _tree_node(root_id: str, directory: Path, relative_path: Path, file_counter: list[int]) -> Optional[dict]:
+    if directory.name in IGNORED_DIRECTORIES or directory.name.startswith("."):
+        return None
+    children = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.is_symlink():
+            continue
+        child_relative_path = relative_path / entry.name
+        if entry.is_dir():
+            child = _tree_node(root_id, entry, child_relative_path, file_counter)
+            if child and child["children"]:
+                children.append(child)
+        elif (
+            entry.suffix.lower() in EDITABLE_SUFFIXES
+            and entry.stat().st_size <= MAX_CONTENT_BYTES
+            and file_counter[0] < MAX_TREE_FILES
+        ):
+            file_counter[0] += 1
+            children.append({
+                "kind": "file",
+                "name": entry.name,
+                "id": f"{root_id}:{child_relative_path.as_posix()}",
+            })
+    return {"kind": "directory", "name": relative_path.name or root_id, "children": children}
+
+
+def _repository_tree() -> list[dict]:
+    return [
+        _tree_node(root_id, root, Path(), [0])
+        for root_id, root in REPOSITORIES.items()
+        if root.is_dir()
+    ]
 
 
 def _sha(content: str) -> str:
@@ -96,20 +129,20 @@ def _validate(path: Path, content: str) -> None:
     try:
         if path.suffix == ".py":
             compile(ast.parse(content, filename=path.name), path.name, "exec")
-        else:
+        elif path.suffix == ".xml":
             ET.fromstring(content)
     except (SyntaxError, ET.ParseError) as exc:
         raise HTTPException(status_code=400, detail=f"Syntax error: {exc}") from exc
 
 
 def _backup_path(file_id: str, revision: str) -> Path:
-    return BACKUP_DIR / file_id / revision
+    return BACKUP_DIR / hashlib.sha256(file_id.encode("utf-8")).hexdigest() / revision
 
 
 def _save_backup(file_id: str, current: str) -> None:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     BACKUP_DIR.chmod(0o700)
-    folder = BACKUP_DIR / file_id
+    folder = BACKUP_DIR / hashlib.sha256(file_id.encode("utf-8")).hexdigest()
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     folder.chmod(0o700)
     original = folder / "original"
@@ -145,15 +178,10 @@ def _restart_service() -> None:
         os._exit(75)
 
 
-@router.get("/files")
-def list_files(authorization: Optional[str] = Header(default=None)) -> dict:
+@router.get("/tree")
+def get_repository_tree(authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
-    return {
-        "files": [
-            {"id": file_id, "name": path.name, "description": description}
-            for file_id, (path, description) in FILES.items()
-        ]
-    }
+    return {"roots": _repository_tree()}
 
 
 @router.get("/logs")
@@ -162,7 +190,7 @@ def get_backend_logs(authorization: Optional[str] = Header(default=None)) -> dic
     try:
         result = subprocess.run(
             ["journalctl", "--user", "--unit=mujocoweb-backend.service",
-             "--lines=120", "--no-pager", "--output=short-iso"],
+             "--lines=2000", "--no-pager", "--output=short-iso"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             encoding="utf-8",
@@ -174,7 +202,7 @@ def get_backend_logs(authorization: Optional[str] = Header(default=None)) -> dic
         raise HTTPException(status_code=503, detail="Backend logs are unavailable") from exc
     if result.returncode != 0:
         raise HTTPException(status_code=503, detail="Backend logs are unavailable")
-    return {"logs": result.stdout[-60_000:]}
+    return {"logs": result.stdout[-500_000:]}
 
 
 @router.get("/files/{file_id}")
@@ -182,7 +210,7 @@ def get_file(file_id: str, authorization: Optional[str] = Header(default=None)) 
     _authorize(authorization)
     path, description = _file(file_id)
     content = _read(path)
-    folder = BACKUP_DIR / file_id
+    folder = BACKUP_DIR / hashlib.sha256(file_id.encode("utf-8")).hexdigest()
     revisions = ["original"] if (folder / "original").is_file() else []
     if folder.is_dir():
         revisions += sorted(
