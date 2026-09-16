@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict, deque
 import json
 import os
+from editor_api import _authorize as authorize_editor, router as editor_router
 import queue
 import threading
 import time
@@ -18,6 +19,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from object_generator import generate_object, validate_object_spec
@@ -59,6 +61,23 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 )
 
 app = FastAPI(title="MuJoCo Web Backend")
+app.include_router(editor_router)
+
+
+@app.middleware("http")
+async def guard_editor_requests(request: Request, call_next):
+    if request.url.path.startswith("/api/editor") and request.method != "OPTIONS":
+        try:
+            authorize_editor(request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if request.method in {"PUT", "POST"}:
+            try:
+                if int(request.headers.get("content-length", "0")) > 170_000:
+                    return JSONResponse({"detail": "Editor request is too large"}, status_code=413)
+            except ValueError:
+                return JSONResponse({"detail": "Invalid content length"}, status_code=400)
+    return await call_next(request)
 generation_requests = defaultdict(deque)
 generation_lock = threading.Lock()
 GENERATION_LIMIT = 12
