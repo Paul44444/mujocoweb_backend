@@ -112,6 +112,32 @@ def _repository_tree() -> list[dict]:
     ]
 
 
+def _find_definition(file_id: str, symbol: str) -> Optional[dict]:
+    path, _ = _file(file_id)
+    root_id, _, _ = file_id.partition(":")
+    root = REPOSITORIES[root_id]
+    candidates = [path]
+    candidates.extend(
+        candidate for candidate in root.rglob("*.py")
+        if candidate != path
+        and not candidate.is_symlink()
+        and not any(part in IGNORED_DIRECTORIES or part.startswith(".") for part in candidate.relative_to(root).parts)
+        and candidate.stat().st_size <= MAX_CONTENT_BYTES
+    )
+    for candidate in candidates:
+        try:
+            tree = ast.parse(candidate.read_text(encoding="utf-8"), filename=str(candidate))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == symbol:
+                return {
+                    "id": f"{root_id}:{candidate.relative_to(root).as_posix()}",
+                    "line": node.lineno,
+                }
+    return None
+
+
 def _sha(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -182,6 +208,21 @@ def _restart_service() -> None:
 def get_repository_tree(authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
     return {"roots": _repository_tree()}
+
+
+@router.get("/definitions")
+def get_definition(
+    file_id: str,
+    symbol: str,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    _authorize(authorization)
+    if not re.fullmatch(r"[A-Za-z_]\w*", symbol):
+        raise HTTPException(status_code=400, detail="Invalid Python symbol")
+    result = _find_definition(file_id, symbol)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No Python definition found for {symbol}")
+    return result
 
 
 @router.get("/logs")
