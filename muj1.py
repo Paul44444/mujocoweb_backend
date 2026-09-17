@@ -264,7 +264,17 @@ def _editor_scene_model(scene_assets):
             "pos": " ".join(str(value) for value in position),
             "euler": " ".join(str(value) for value in rotation),
         })
-        common = {"contype": "0", "conaffinity": "0", "rgba": "0.98 0.42 0.1 1"}
+        # These bodies intentionally have no joints, so they remain fixed scene
+        # props and do not alter the observation size expected by the DAPG
+        # policy. Unlike the former visual-only props, they participate in
+        # MuJoCo contacts: the hand and the task object cannot pass through.
+        common = {
+            "contype": "1",
+            "conaffinity": "1",
+            "condim": "4",
+            "friction": "1.0 0.015 0.001",
+            "rgba": "0.98 0.42 0.1 1",
+        }
         if asset == "hammer":
             ET.SubElement(body, "geom", {**common, "type": "capsule", "fromto": "0 0 -0.065 0 0 0.065", "size": "0.012"})
             ET.SubElement(body, "geom", {**common, "type": "box", "pos": "0 0 0.07", "size": "0.05 0.016 0.018"})
