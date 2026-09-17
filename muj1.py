@@ -558,6 +558,10 @@ def run_simulation(
     print("Interactive orbit camera initialized", camera_defaults, flush=True)
 
     if editor_mode:
+        # Match the initialized DAPG scene shown at the beginning of a normal
+        # rollout before taking the static editor frame.
+        env.reset()
+        env.sim.forward()
         frame = env.sim.renderer.render_offscreen(
             width=SIMULATION_WIDTH,
             height=SIMULATION_HEIGHT,
