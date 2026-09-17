@@ -621,7 +621,19 @@ def run_simulation(
                         reset_camera()
             frame = env.sim.renderer.render_offscreen(width=SIMULATION_WIDTH, height=SIMULATION_HEIGHT, camera_id=interactive_camera, device_id=0)
             if frame_callback is not None:
-                frame_callback(frame, {"editor_preview": True, "episode": 0, "step": 0, "simulation_time": 0.0, "reward": 0.0})
+                frame_callback(frame, {
+                    "editor_preview": True,
+                    "episode": 0,
+                    "step": 0,
+                    "simulation_time": 0.0,
+                    "reward": 0.0,
+                    "camera": {
+                        "azimuth": float(interactive_camera.azimuth),
+                        "elevation": float(interactive_camera.elevation),
+                        "distance": float(interactive_camera.distance),
+                        "lookat": [float(value) for value in interactive_camera.lookat],
+                    },
+                })
             time.sleep(1 / 20)
         return None
 
