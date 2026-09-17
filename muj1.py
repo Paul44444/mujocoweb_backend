@@ -525,7 +525,7 @@ def run_simulation(
 
     environment_kwargs = dict(task.get("environment_kwargs", {}))
     generated_model_path = None
-    if editor_mode and scene_assets:
+    if scene_assets:
         generated_model_path = _editor_scene_model(scene_assets)
         environment_kwargs["model_path"] = generated_model_path
     elif object_spec is not None:

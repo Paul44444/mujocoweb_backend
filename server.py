@@ -174,9 +174,9 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             await websocket.close(code=1008)
             return
     raw_scene = websocket.query_params.get("scene")
-    if editor_mode and raw_scene:
+    if raw_scene:
         if task_id != "relocate" or len(raw_scene) > 12_000:
-            await websocket.send_json({"type": "error", "message": "Scene editing currently supports Relocate only."})
+            await websocket.send_json({"type": "error", "message": "Custom scenes currently support Relocate only."})
             await websocket.close(code=1008)
             return
         try:
