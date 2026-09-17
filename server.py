@@ -145,6 +145,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
     task_id = websocket.query_params.get("task", "relocate").lower()
+    editor_mode = websocket.query_params.get("editor") == "1"
     if task_id not in AVAILABLE_TASKS:
         await websocket.send_json(
             {
@@ -478,6 +479,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                 pause_event=pause_event,
                 task_id=task_id,
                 object_spec=object_spec,
+                editor_mode=editor_mode,
             )
     
             print(
