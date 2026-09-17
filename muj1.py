@@ -562,16 +562,24 @@ def run_simulation(
         # rollout before taking the static editor frame.
         env.reset()
         env.sim.forward()
-        frame = env.sim.renderer.render_offscreen(
-            width=SIMULATION_WIDTH,
-            height=SIMULATION_HEIGHT,
-            camera_id=interactive_camera,
-            device_id=0,
-        )
-        if frame_callback is not None:
-            frame_callback(frame, {"editor_preview": True, "episode": 0, "step": 0, "simulation_time": 0.0, "reward": 0.0})
-        print("run_simulation: editor preview rendered", flush=True)
-        return None
+        while True:
+            if control_queue is not None:
+                while True:
+                    try:
+                        command = control_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if command.get("type") == "camera_orbit":
+                        interactive_camera.azimuth -= command["delta_x"] * 0.25
+                        interactive_camera.elevation = float(np.clip(interactive_camera.elevation - command["delta_y"] * 0.2, -85.0, -5.0))
+                    elif command.get("type") == "camera_zoom":
+                        interactive_camera.distance = float(np.clip(interactive_camera.distance * (1.12 ** command["delta"]), 0.45, 5.0))
+                    elif command.get("type") == "camera_reset":
+                        reset_camera()
+            frame = env.sim.renderer.render_offscreen(width=SIMULATION_WIDTH, height=SIMULATION_HEIGHT, camera_id=interactive_camera, device_id=0)
+            if frame_callback is not None:
+                frame_callback(frame, {"editor_preview": True, "episode": 0, "step": 0, "simulation_time": 0.0, "reward": 0.0})
+            time.sleep(1 / 20)
 
     # Load the trained policy.
     # Load the trained policy.
