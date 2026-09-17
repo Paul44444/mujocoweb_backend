@@ -4,7 +4,7 @@ import asyncio
 from collections import defaultdict, deque
 import json
 import os
-from editor_api import _authorize as authorize_editor, router as editor_router
+from editor_api import SceneAsset, _authorize as authorize_editor, router as editor_router
 import queue
 import threading
 import time
@@ -146,6 +146,22 @@ async def simulation_websocket(websocket: WebSocket) -> None:
 
     task_id = websocket.query_params.get("task", "relocate").lower()
     editor_mode = websocket.query_params.get("editor") == "1"
+    scene_assets = []
+    raw_scene = websocket.query_params.get("scene")
+    if editor_mode and raw_scene:
+        if task_id != "relocate" or len(raw_scene) > 12_000:
+            await websocket.send_json({"type": "error", "message": "Scene editing currently supports Relocate only."})
+            await websocket.close(code=1008)
+            return
+        try:
+            scene_data = json.loads(raw_scene)
+            if not isinstance(scene_data, list) or len(scene_data) > 25:
+                raise ValueError("Scene must contain at most 25 assets")
+            scene_assets = [SceneAsset.model_validate(item).model_dump() for item in scene_data]
+        except (ValueError, TypeError) as exc:
+            await websocket.send_json({"type": "error", "message": f"Invalid scene: {exc}"})
+            await websocket.close(code=1008)
+            return
     if task_id not in AVAILABLE_TASKS:
         await websocket.send_json(
             {
@@ -191,6 +207,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     ] = queue.Queue(maxsize=1)
     control_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=64)
     pause_event = threading.Event()
+    stop_event = threading.Event()
 
     simulation_finished = threading.Event()
     simulation_error: list[str] = []
@@ -480,6 +497,8 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                 task_id=task_id,
                 object_spec=object_spec,
                 editor_mode=editor_mode,
+                scene_assets=scene_assets,
+                stop_event=stop_event,
             )
     
             print(
@@ -637,6 +656,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
         traceback.print_exc()
 
     finally:
+        stop_event.set()
         pause_event.clear()
         receiver_task.cancel()
 

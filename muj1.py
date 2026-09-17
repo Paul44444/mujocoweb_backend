@@ -243,6 +243,44 @@ def _generated_relocate_model(object_spec):
     finally:
         model_file.close()
 
+
+def _editor_scene_model(scene_assets):
+    source_path = os.path.join(
+        MODULE_DIRECTORY, "robohive", "robohive", "envs", "hands",
+        "assets", "DAPG_relocate.xml",
+    )
+    tree = ET.parse(source_path)
+    worldbody = tree.find("worldbody")
+    if worldbody is None:
+        raise ValueError("Scene worldbody was not found")
+    for index, item in enumerate(scene_assets):
+        position = item["position"]
+        rotation = item["rotation"]
+        scale = item["scale"]
+        asset = item["asset"]
+        body = ET.SubElement(worldbody, "body", {
+            "name": f"editor_asset_{index}",
+            "pos": " ".join(str(value) for value in position),
+            "euler": " ".join(str(value) for value in rotation),
+        })
+        common = {"contype": "0", "conaffinity": "0", "rgba": "0.98 0.42 0.1 1"}
+        if asset == "hammer":
+            ET.SubElement(body, "geom", {**common, "type": "capsule", "fromto": "0 0 -0.065 0 0 0.065", "size": "0.012"})
+            ET.SubElement(body, "geom", {**common, "type": "box", "pos": "0 0 0.07", "size": "0.05 0.016 0.018"})
+        else:
+            geom_type = {"box": "box", "sphere": "sphere", "cylinder": "cylinder"}[asset]
+            size = [scale[0]] if asset == "sphere" else [scale[0], scale[2]] if asset == "cylinder" else scale
+            ET.SubElement(body, "geom", {**common, "type": geom_type, "size": " ".join(str(value) for value in size)})
+    model_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".xml", prefix="editor_scene_",
+        dir=os.path.dirname(source_path), delete=False, encoding="utf-8",
+    )
+    try:
+        tree.write(model_file, encoding="unicode", xml_declaration=True)
+        return model_file.name
+    finally:
+        model_file.close()
+
 # Development settings
 render = "none"
 num_episodes = 1
@@ -409,6 +447,8 @@ def run_simulation(
     task_id="relocate",
     object_spec=None,
     editor_mode=False,
+    scene_assets=None,
+    stop_event=None,
 ):
     simulation_start = time.perf_counter()
 
@@ -483,7 +523,10 @@ def run_simulation(
 
     environment_kwargs = dict(task.get("environment_kwargs", {}))
     generated_model_path = None
-    if object_spec is not None:
+    if editor_mode and scene_assets:
+        generated_model_path = _editor_scene_model(scene_assets)
+        environment_kwargs["model_path"] = generated_model_path
+    elif object_spec is not None:
         generated_model_path = _generated_relocate_model(object_spec)
         environment_kwargs["model_path"] = generated_model_path
     try:
@@ -562,7 +605,7 @@ def run_simulation(
         # rollout before taking the static editor frame.
         env.reset()
         env.sim.forward()
-        while True:
+        while stop_event is None or not stop_event.is_set():
             if control_queue is not None:
                 while True:
                     try:
@@ -580,6 +623,7 @@ def run_simulation(
             if frame_callback is not None:
                 frame_callback(frame, {"editor_preview": True, "episode": 0, "step": 0, "simulation_time": 0.0, "reward": 0.0})
             time.sleep(1 / 20)
+        return None
 
     # Load the trained policy.
     # Load the trained policy.
