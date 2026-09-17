@@ -447,6 +447,7 @@ def run_simulation(
     task_id="relocate",
     object_spec=None,
     editor_mode=False,
+    editor_camera=None,
     scene_assets=None,
     stop_event=None,
 ):
@@ -597,6 +598,11 @@ def run_simulation(
         interactive_camera.lookat[:] = camera_defaults["lookat"]
 
     reset_camera()
+    if editor_mode and editor_camera:
+        interactive_camera.azimuth = editor_camera["azimuth"]
+        interactive_camera.elevation = editor_camera["elevation"]
+        interactive_camera.distance = editor_camera["distance"]
+        interactive_camera.lookat[:] = editor_camera["lookat"]
     camera_name_local = interactive_camera
     print("Interactive orbit camera initialized", camera_defaults, flush=True)
 

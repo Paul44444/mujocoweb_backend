@@ -147,6 +147,32 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     task_id = websocket.query_params.get("task", "relocate").lower()
     editor_mode = websocket.query_params.get("editor") == "1"
     scene_assets = []
+    editor_camera = None
+    raw_camera = websocket.query_params.get("camera")
+    if editor_mode and raw_camera:
+        try:
+            if len(raw_camera) > 500:
+                raise ValueError("Camera data is too long")
+            camera_data = json.loads(raw_camera)
+            if not isinstance(camera_data, dict):
+                raise ValueError("Camera must be an object")
+            azimuth = float(camera_data["azimuth"])
+            elevation = float(camera_data["elevation"])
+            distance = float(camera_data["distance"])
+            lookat = [float(value) for value in camera_data["lookat"]]
+            if (
+                not all(np.isfinite(value) for value in [azimuth, elevation, distance, *lookat])
+                or len(lookat) != 3
+                or not -85 <= elevation <= -5
+                or not 0.45 <= distance <= 5
+                or any(abs(value) > 10 for value in lookat)
+            ):
+                raise ValueError("Camera values are out of range")
+            editor_camera = {"azimuth": azimuth, "elevation": elevation, "distance": distance, "lookat": lookat}
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            await websocket.send_json({"type": "error", "message": f"Invalid camera: {exc}"})
+            await websocket.close(code=1008)
+            return
     raw_scene = websocket.query_params.get("scene")
     if editor_mode and raw_scene:
         if task_id != "relocate" or len(raw_scene) > 12_000:
@@ -497,6 +523,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                 task_id=task_id,
                 object_spec=object_spec,
                 editor_mode=editor_mode,
+                editor_camera=editor_camera,
                 scene_assets=scene_assets,
                 stop_event=stop_event,
             )
