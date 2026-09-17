@@ -393,6 +393,26 @@ async def simulation_websocket(websocket: WebSocket) -> None:
 
             command_type = data.get("type")
 
+            if command_type == "scene_transform" and editor_mode:
+                try:
+                    index = data["index"]
+                    position = data["position"]
+                    rotation = data["rotation"]
+                    if type(index) is not int or not 0 <= index < len(scene_assets):
+                        raise ValueError("Invalid asset index")
+                    if not isinstance(position, list) or not isinstance(rotation, list) or len(position) != 3 or len(rotation) != 3:
+                        raise ValueError("Invalid transform")
+                    position = [float(value) for value in position]
+                    rotation = [float(value) for value in rotation]
+                    if not all(np.isfinite(value) for value in position + rotation):
+                        raise ValueError("Non-finite transform")
+                    if any(abs(value) > 5 for value in position) or any(abs(value) > 3600 for value in rotation):
+                        raise ValueError("Transform out of range")
+                    control_queue.put_nowait({"type": "scene_transform", "index": index, "position": position, "rotation": rotation})
+                except (KeyError, TypeError, ValueError, OverflowError, queue.Full):
+                    pass
+                continue
+
             if command_type == "set_paused":
                 if data.get("paused") is True:
                     pause_event.set()

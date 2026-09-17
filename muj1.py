@@ -9,6 +9,7 @@ License :: Under Apache License, Version 2.0 (the "License"); you may not use th
 
 import faulthandler
 import os
+import math
 import pickle
 import queue
 import sys
@@ -625,6 +626,20 @@ def run_simulation(
                         interactive_camera.distance = float(np.clip(interactive_camera.distance * (1.12 ** command["delta"]), 0.45, 5.0))
                     elif command.get("type") == "camera_reset":
                         reset_camera()
+                    elif command.get("type") == "scene_transform":
+                        index = command["index"]
+                        body_id = env.sim.model.body_name2id(f"editor_asset_{index}")
+                        env.sim.model.body_pos[body_id, :] = command["position"]
+                        x, y, z = [math.radians(value) / 2 for value in command["rotation"]]
+                        cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
+                        sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
+                        env.sim.model.body_quat[body_id, :] = [
+                            cx * cy * cz + sx * sy * sz,
+                            sx * cy * cz - cx * sy * sz,
+                            cx * sy * cz + sx * cy * sz,
+                            cx * cy * sz - sx * sy * cz,
+                        ]
+                        env.sim.forward()
             frame = env.sim.renderer.render_offscreen(width=SIMULATION_WIDTH, height=SIMULATION_HEIGHT, camera_id=interactive_camera, device_id=0)
             if frame_callback is not None:
                 frame_callback(frame, {
