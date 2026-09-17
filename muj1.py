@@ -642,6 +642,10 @@ def run_simulation(
                         env.sim.forward()
             frame = env.sim.renderer.render_offscreen(width=SIMULATION_WIDTH, height=SIMULATION_HEIGHT, camera_id=interactive_camera, device_id=0)
             if frame_callback is not None:
+                render_cameras = env.sim.renderer._renderer.scene.camera
+                # MuJoCo averages both eye cameras for a non-stereo frame.
+                def camera_average(attribute):
+                    return np.mean([getattr(camera, attribute) for camera in render_cameras], axis=0)
                 frame_callback(frame, {
                     "editor_preview": True,
                     "episode": 0,
@@ -653,6 +657,15 @@ def run_simulation(
                         "elevation": float(interactive_camera.elevation),
                         "distance": float(interactive_camera.distance),
                         "lookat": [float(value) for value in interactive_camera.lookat],
+                    },
+                    "render_camera": {
+                        "position": [float(value) for value in camera_average("pos")],
+                        "forward": [float(value) for value in camera_average("forward")],
+                        "up": [float(value) for value in camera_average("up")],
+                        "near": float(camera_average("frustum_near")),
+                        "top": float(camera_average("frustum_top")),
+                        "bottom": float(camera_average("frustum_bottom")),
+                        "center": float(camera_average("frustum_center")),
                     },
                 })
             time.sleep(1 / 20)
