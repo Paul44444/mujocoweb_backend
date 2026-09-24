@@ -597,7 +597,10 @@ def run_simulation(
         "azimuth": 90.0,
         "elevation": -35.0,
         "distance": 2.35,
-        "lookat": np.array([0.0, -0.12, 0.18]),
+        # Centre the shared DAPG work area rather than the space above it.
+        # The hand approaches from y=-0.7 while the manipulated objects sit
+        # around the origin, so this midpoint keeps both fully in frame.
+        "lookat": np.array([0.0, -0.25, 0.08]),
     }
     interactive_camera = mujoco.MjvCamera()
     mujoco.mjv_defaultCamera(interactive_camera)
