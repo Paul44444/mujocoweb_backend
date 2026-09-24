@@ -6,6 +6,7 @@ import json
 import os
 from editor_api import SceneAsset, _authorize as authorize_editor, router as editor_router
 import queue
+import re
 import threading
 import time
 import traceback
@@ -62,15 +63,17 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 
 app = FastAPI(title="MuJoCo Web Backend")
 app.include_router(editor_router)
+PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users/[^/]+/scenes(?:/[^/]+)?$")
 
 
 @app.middleware("http")
 async def guard_editor_requests(request: Request, call_next):
     if request.url.path.startswith("/api/editor") and request.method != "OPTIONS":
-        try:
-            authorize_editor(request.headers.get("authorization"))
-        except HTTPException as exc:
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if not PUBLIC_SCENE_PATH.fullmatch(request.url.path):
+            try:
+                authorize_editor(request.headers.get("authorization"))
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         if request.method in {"PUT", "POST"}:
             try:
                 if int(request.headers.get("content-length", "0")) > 170_000:

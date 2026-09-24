@@ -42,6 +42,7 @@ MAX_TREE_FILES = 2_000
 EDITABLE_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt", ".xml", ".yaml", ".yml"}
 IGNORED_DIRECTORIES = {".git", ".mypy_cache", ".pytest_cache", ".venv", "__pycache__", "logs", "iterations"}
 REVISION_PATTERN = re.compile(r"^[0-9]{14}-[0-9a-f]{12}$")
+USER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$")
 router = APIRouter(prefix="/api/editor", tags=["editor"])
 write_lock = threading.Lock()
 
@@ -82,6 +83,30 @@ def _scene_path(name: str) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,47}", name):
         raise HTTPException(status_code=400, detail="Invalid scene name")
     return SCENE_DIR / f"{name}.json"
+
+
+def _user_scene_dir(user: str) -> Path:
+    if not USER_PATTERN.fullmatch(user):
+        raise HTTPException(status_code=400, detail="User name must be 1-32 letters, numbers, spaces, _ or -")
+    # User names are deliberately case-insensitive in this password-free test.
+    return SCENE_DIR / "users" / user.casefold()
+
+
+def _user_scene_path(user: str, name: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,47}", name):
+        raise HTTPException(status_code=400, detail="Invalid scene name")
+    return _user_scene_dir(user) / f"{name}.json"
+
+
+def _ensure_user_starter_scene(user: str) -> None:
+    path = _user_scene_path(user, "DAPG Relocate Start")
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(json.dumps(SceneRequest(name="DAPG Relocate Start", assets=[
+        SceneAsset(id="training-cube", asset="box", position=[0.0, 0.0, 0.035], rotation=[0.0, 0.0, 0.0], scale=[0.03, 0.03, 0.03]),
+    ]).model_dump(), indent=2), encoding="utf-8")
+    path.chmod(0o600)
 
 
 def _ensure_starter_scene() -> None:
@@ -260,6 +285,43 @@ def list_scenes(authorization: Optional[str] = Header(default=None)) -> dict:
 def list_scene_assets(authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
     return {"assets": SCENE_ASSETS}
+
+
+@router.get("/users/{user}/scenes")
+def list_user_scenes(user: str) -> dict:
+    """List scenes in a name-only test account; no password is required."""
+    _ensure_user_starter_scene(user)
+    folder = _user_scene_dir(user)
+    return {
+        "user": user,
+        "scenes": sorted(path.stem for path in folder.glob("*.json")),
+        "authentication": "none",
+    }
+
+
+@router.get("/users/{user}/scenes/{name}")
+def get_user_scene(user: str, name: str) -> dict:
+    path = _user_scene_path(user, name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Scene not found")
+    try:
+        return SceneRequest.model_validate_json(path.read_text(encoding="utf-8")).model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Stored scene is invalid") from exc
+
+
+@router.put("/users/{user}/scenes/{name}")
+def save_user_scene(user: str, name: str, request: SceneRequest) -> dict:
+    if request.name != name:
+        raise HTTPException(status_code=400, detail="Scene name does not match URL")
+    if len({asset.id for asset in request.assets}) != len(request.assets):
+        raise HTTPException(status_code=400, detail="Asset IDs must be unique")
+    path = _user_scene_path(user, name)
+    with write_lock:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(json.dumps(request.model_dump(), indent=2), encoding="utf-8")
+        path.chmod(0o600)
+    return {"user": user, "name": name, "assets": len(request.assets)}
 
 
 @router.get("/scenes/{name}")
