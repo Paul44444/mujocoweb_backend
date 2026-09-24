@@ -100,9 +100,13 @@ def _user_scene_path(user: str, name: str) -> Path:
 
 def _ensure_user_starter_scene(user: str) -> None:
     path = _user_scene_path(user, "DAPG Relocate Start")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    profile = path.parent / ".profile"
+    if not profile.exists():
+        profile.write_text(user, encoding="utf-8")
+        profile.chmod(0o600)
     if path.exists():
         return
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(json.dumps(SceneRequest(name="DAPG Relocate Start", assets=[
         SceneAsset(id="training-cube", asset="box", position=[0.0, 0.0, 0.035], rotation=[0.0, 0.0, 0.0], scale=[0.03, 0.03, 0.03]),
     ]).model_dump(), indent=2), encoding="utf-8")
@@ -297,6 +301,25 @@ def list_user_scenes(user: str) -> dict:
         "scenes": sorted(path.stem for path in folder.glob("*.json")),
         "authentication": "none",
     }
+
+
+@router.get("/users")
+def list_scene_users() -> dict:
+    """List the public name-only test accounts that currently exist."""
+    users_root = SCENE_DIR / "users"
+    if not users_root.is_dir():
+        return {"users": [], "authentication": "none"}
+    users = []
+    for folder in users_root.iterdir():
+        if not folder.is_dir() or not USER_PATTERN.fullmatch(folder.name):
+            continue
+        profile = folder / ".profile"
+        try:
+            display_name = profile.read_text(encoding="utf-8").strip() if profile.is_file() else folder.name
+        except OSError:
+            display_name = folder.name
+        users.append(display_name if USER_PATTERN.fullmatch(display_name) else folder.name)
+    return {"users": sorted(users, key=str.casefold), "authentication": "none"}
 
 
 @router.get("/users/{user}/scenes/{name}")

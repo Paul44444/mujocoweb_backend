@@ -63,7 +63,7 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 
 app = FastAPI(title="MuJoCo Web Backend")
 app.include_router(editor_router)
-PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users/[^/]+/scenes(?:/[^/]+)?$")
+PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users(?:/[^/]+/scenes(?:/[^/]+)?)?$")
 
 
 @app.middleware("http")
