@@ -66,7 +66,18 @@ class RelocateEnvV1(env_base.MujocoEnv):
                        frame_skip=frame_skip,
                        **kwargs)
         self.init_qpos = np.zeros(self.init_qpos.shape)
-        self.init_qvel = np.zeros(self.init_qpos.shape)
+        self.init_qvel = np.zeros(self.init_qvel.shape)
+        # Scene-editor assets are free bodies. Preserve their XML pose when
+        # resetting, while retaining the original zeroed hand/object state.
+        for body_id in range(sim.model.nbody):
+            body_name = sim.model.id2name(body_id, 'body')
+            if not body_name or not body_name.startswith('editor_asset_'):
+                continue
+            joint_id = sim.model.body_jntadr[body_id]
+            if joint_id < 0:
+                continue
+            qpos_address = sim.model.jnt_qposadr[joint_id]
+            self.init_qpos[qpos_address:qpos_address + 7] = sim.model.qpos0[qpos_address:qpos_address + 7]
 
 
     def get_rewards_old(self):
@@ -127,7 +138,9 @@ class RelocateEnvV1(env_base.MujocoEnv):
         # qpos for hand, xpos for obj, xpos for target
         obs_dict = {}
         obs_dict['time'] = np.array([sim.data.time])
-        obs_dict['hand_jnt'] = sim.data.qpos[:-6].copy()
+        # The trained Relocate policy expects exactly the 30 hand positions.
+        # Extra editor free-joint props must not expand this observation.
+        obs_dict['hand_jnt'] = sim.data.qpos[:30].copy()
         obs_dict['palm_obj_err'] = sim.data.site_xpos[self.S_grasp_sid] - sim.data.body_xpos[self.obj_bid]
         obs_dict['palm_tar_err'] = sim.data.site_xpos[self.S_grasp_sid] - sim.data.site_xpos[self.target_obj_sid]
         obs_dict['obj_tar_err'] = sim.data.body_xpos[self.obj_bid] - sim.data.site_xpos[self.target_obj_sid]

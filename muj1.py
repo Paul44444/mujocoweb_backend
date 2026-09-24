@@ -264,15 +264,16 @@ def _editor_scene_model(scene_assets):
             "pos": " ".join(str(value) for value in position),
             "euler": " ".join(str(value) for value in rotation),
         })
-        # These bodies intentionally have no joints, so they remain fixed scene
-        # props and do not alter the observation size expected by the DAPG
-        # policy. Unlike the former visual-only props, they participate in
-        # MuJoCo contacts: the hand and the task object cannot pass through.
+        # A free joint makes an editor prop a real rigid body: it has mass,
+        # gravity, contact forces, and can be pushed or rolled by the hand.
+        # RelocateEnvV1 keeps these extra joint values out of the policy input.
+        ET.SubElement(body, "freejoint", {"name": f"editor_asset_joint_{index}"})
         common = {
             "contype": "1",
             "conaffinity": "1",
             "condim": "4",
             "friction": "1.0 0.015 0.001",
+            "density": "300",
             "rgba": "0.98 0.42 0.1 1",
         }
         if asset == "hammer":
@@ -639,11 +640,13 @@ def run_simulation(
                     elif command.get("type") == "scene_transform":
                         index = command["index"]
                         body_id = env.sim.model.body_name2id(f"editor_asset_{index}")
-                        env.sim.model.body_pos[body_id, :] = command["position"]
+                        joint_id = env.sim.model.body_jntadr[body_id]
+                        qpos_address = env.sim.model.jnt_qposadr[joint_id]
+                        env.sim.data.qpos[qpos_address:qpos_address + 3] = command["position"]
                         x, y, z = [math.radians(value) / 2 for value in command["rotation"]]
                         cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
                         sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
-                        env.sim.model.body_quat[body_id, :] = [
+                        env.sim.data.qpos[qpos_address + 3:qpos_address + 7] = [
                             cx * cy * cz + sx * sy * sz,
                             sx * cy * cz - cx * sy * sz,
                             cx * sy * cz + sx * cy * sz,
