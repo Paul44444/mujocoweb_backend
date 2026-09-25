@@ -75,6 +75,12 @@ PUBLIC_EDITOR_READ_PATH = re.compile(
 
 @app.middleware("http")
 async def guard_editor_requests(request: Request, call_next):
+    if request.url.path.startswith("/api/assistant") and request.method == "POST":
+        try:
+            if int(request.headers.get("content-length", "0")) > 100_000:
+                return JSONResponse({"detail": "Assistant request is too large"}, status_code=413)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid content length"}, status_code=400)
     if request.url.path.startswith("/api/editor") and request.method != "OPTIONS":
         public_read = request.method == "GET" and PUBLIC_EDITOR_READ_PATH.fullmatch(request.url.path)
         if not PUBLIC_SCENE_PATH.fullmatch(request.url.path) and not public_read:
@@ -93,6 +99,7 @@ generation_requests = defaultdict(deque)
 generation_lock = threading.Lock()
 GENERATION_LIMIT = 12
 GENERATION_WINDOW_SECONDS = 60 * 60
+ISAAC_SCENE_ASSETS = {"box", "sphere", "cylinder", "kuka_allegro"}
 
 AVAILABLE_TASKS = {"relocate", "hammer", "door", "pen"}
 DEFAULT_FRONTEND_ORIGINS = (
@@ -113,6 +120,40 @@ frontend_origins = [
     ).split(",")
     if origin.strip()
 ]
+
+
+def _validated_isaac_asset(value: Dict[str, Any]) -> Dict[str, Any]:
+    asset_type = str(value.get("asset", ""))
+    default_scale = [1.0, 1.0, 1.0] if asset_type == "kuka_allegro" else [0.04, 0.04, 0.04]
+    asset = SceneAsset.model_validate({
+        "id": value.get("id"),
+        "asset": asset_type,
+        "position": value.get("position"),
+        "rotation": value.get("rotation", [0.0, 0.0, 0.0]),
+        "scale": value.get("scale", default_scale),
+        "color": value.get("color", [0.15, 0.55, 0.95]),
+    }).model_dump()
+    if asset["asset"] not in ISAAC_SCENE_ASSETS:
+        raise ValueError("Unsupported Isaac scene asset")
+    numbers = [*asset["position"], *asset["rotation"], *asset["scale"], *asset["color"]]
+    if not all(np.isfinite(value) for value in numbers):
+        raise ValueError("Scene asset values must be finite")
+    if any(value <= 0 for value in asset["scale"]):
+        raise ValueError("Scene asset scale must be positive")
+    if any(value < 0 or value > 1 for value in asset["color"]):
+        raise ValueError("Scene asset color must be between 0 and 1")
+    if any(abs(value) > 360 for value in asset["rotation"]):
+        raise ValueError("Scene asset rotation is out of range")
+    x, y, z = asset["position"]
+    if asset["asset"] == "kuka_allegro":
+        if not (-1.0 <= x <= 1.25 and -1.0 <= y <= 1.0 and 0.0 <= z <= 0.5):
+            raise ValueError("KUKA position is outside the editable scene")
+        asset["scale"] = [1.0, 1.0, 1.0]
+    elif not (0.02 <= x <= 0.98 and -0.45 <= y <= 0.45 and 0.0 <= z <= 0.6):
+        raise ValueError("Asset position is outside the table")
+    elif any(value > 0.25 for value in asset["scale"]):
+        raise ValueError("Scene asset scale is too large")
+    return asset
 
 app.add_middleware(
     CORSMiddleware,
@@ -199,26 +240,26 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                         },
                     )
                 elif command_type == "scene_spawn":
-                    asset_id = str(command["id"])
-                    asset = str(command["asset"])
-                    position = [float(value) for value in command["position"]]
-                    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,47}", asset_id):
-                        raise ValueError("Invalid asset id")
-                    if asset not in {"box", "sphere", "cylinder"} or len(position) != 3:
-                        raise ValueError("Invalid Isaac asset")
-                    if not all(np.isfinite(value) for value in position):
-                        raise ValueError("Invalid asset position")
-                    if not (0.02 <= position[0] <= 0.98 and -0.45 <= position[1] <= 0.45):
-                        raise ValueError("Asset position is outside the table")
+                    asset = _validated_isaac_asset(command)
                     await loop.run_in_executor(
                         None,
                         publish_command,
                         {
                             "type": command_type,
-                            "id": asset_id,
-                            "asset": asset,
-                            "position": position,
+                            **asset,
                         },
+                    )
+                elif command_type == "scene_replace":
+                    raw_assets = command.get("assets")
+                    if not isinstance(raw_assets, list) or len(raw_assets) > 16:
+                        raise ValueError("Invalid Isaac scene")
+                    assets = [_validated_isaac_asset(value) for value in raw_assets]
+                    if len({asset["id"] for asset in assets}) != len(assets):
+                        raise ValueError("Isaac scene asset IDs must be unique")
+                    await loop.run_in_executor(
+                        None,
+                        publish_command,
+                        {"type": command_type, "assets": assets},
                     )
             except (KeyError, TypeError, ValueError, OSError):
                 pass
@@ -356,6 +397,8 @@ async def simulation_websocket(websocket: WebSocket) -> None:
             if not isinstance(scene_data, list) or len(scene_data) > 25:
                 raise ValueError("Scene must contain at most 25 assets")
             scene_assets = [SceneAsset.model_validate(item).model_dump() for item in scene_data]
+            if any(item["asset"] == "kuka_allegro" for item in scene_assets):
+                raise ValueError("KUKA scene assets require the Isaac Lab engine")
         except (ValueError, TypeError) as exc:
             await websocket.send_json({"type": "error", "message": f"Invalid scene: {exc}"})
             await websocket.close(code=1008)

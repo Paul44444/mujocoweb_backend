@@ -34,10 +34,12 @@ simulation_app = launcher.app
 # Isaac/Omniverse modules must be imported only after AppLauncher.
 import gymnasium as gym
 import numpy as np
+import omni.usd
 from PIL import Image
 import torch
 
 import isaaclab.sim as sim_utils
+from isaaclab_assets.robots import KUKA_ALLEGRO_CFG
 from isaaclab.sensors import CameraCfg
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
@@ -113,6 +115,18 @@ try:
     }
     web_assets = []
 
+    def euler_degrees_to_quaternion(rotation: list[float]) -> tuple[float, float, float, float]:
+        roll, pitch, yaw = (math.radians(float(value)) * 0.5 for value in rotation)
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        return (
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        )
+
     def update_camera_pose() -> None:
         azimuth = math.radians(camera_state["azimuth"])
         elevation = math.radians(camera_state["elevation"])
@@ -155,13 +169,32 @@ try:
             return
         asset = command["asset"]
         position = [float(value) for value in command["position"]]
-        heights = {"box": 0.035, "sphere": 0.035, "cylinder": 0.035}
-        position[2] = max(position[2], heights[asset] + 0.006)
-        colors = {
+        rotation = [float(value) for value in command.get("rotation", [0.0, 0.0, 0.0])]
+        scale = [float(value) for value in command.get("scale", [0.04, 0.04, 0.04])]
+        if asset != "kuka_allegro":
+            position[2] = max(position[2], scale[2] + 0.006)
+        default_colors = {
             "box": (0.15, 0.55, 0.95),
             "sphere": (0.95, 0.35, 0.18),
             "cylinder": (0.35, 0.8, 0.35),
         }
+        color = tuple(float(value) for value in command.get("color", default_colors.get(asset, (0.8, 0.45, 0.12))))
+        prim_path = f"/World/envs/env_0/WebAsset_{len(web_assets) + 1}"
+        orientation = euler_degrees_to_quaternion(rotation)
+        if asset == "kuka_allegro":
+            spawn_cfg = KUKA_ALLEGRO_CFG.spawn
+            spawn_cfg.func(
+                prim_path,
+                spawn_cfg,
+                translation=tuple(position),
+                orientation=orientation,
+            )
+            web_assets.append({
+                "id": command["id"], "asset": asset, "prim_path": prim_path,
+                "position": position, "rotation": rotation, "scale": [1.0, 1.0, 1.0],
+            })
+            print(f"Spawned Isaac scene robot {command['id']} ({asset}) at {position}", flush=True)
+            return
         common = {
             "rigid_props": sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=8,
@@ -176,7 +209,7 @@ try:
                 rest_offset=0.0,
             ),
             "visual_material": sim_utils.PreviewSurfaceCfg(
-                diffuse_color=colors[asset], metallic=0.05, roughness=0.35
+                diffuse_color=color, metallic=0.05, roughness=0.35
             ),
             "physics_material": sim_utils.RigidBodyMaterialCfg(
                 static_friction=0.6,
@@ -185,18 +218,42 @@ try:
             ),
         }
         if asset == "box":
-            spawn_cfg = sim_utils.CuboidCfg(size=(0.07, 0.07, 0.07), **common)
+            spawn_cfg = sim_utils.CuboidCfg(size=tuple(2.0 * value for value in scale), **common)
         elif asset == "sphere":
-            spawn_cfg = sim_utils.SphereCfg(radius=0.035, **common)
+            spawn_cfg = sim_utils.SphereCfg(radius=scale[0], **common)
         else:
-            spawn_cfg = sim_utils.CylinderCfg(radius=0.032, height=0.07, axis="Z", **common)
-        prim_path = f"/World/envs/env_0/WebAsset_{len(web_assets) + 1}"
-        spawn_cfg.func(prim_path, spawn_cfg, translation=tuple(position))
-        web_assets.append({"id": command["id"], "asset": asset, "prim_path": prim_path})
+            spawn_cfg = sim_utils.CylinderCfg(radius=scale[0], height=2.0 * scale[2], axis="Z", **common)
+        spawn_cfg.func(prim_path, spawn_cfg, translation=tuple(position), orientation=orientation)
+        web_assets.append({
+            "id": command["id"], "asset": asset, "prim_path": prim_path,
+            "position": position, "rotation": rotation, "scale": scale,
+        })
         print(
             f"Spawned Isaac web asset {command['id']} ({asset}) at {position}",
             flush=True,
         )
+
+    def replace_web_scene(commands: list[dict]) -> None:
+        stage = omni.usd.get_context().get_stage()
+        for item in reversed(web_assets):
+            stage.RemovePrim(item["prim_path"])
+        web_assets.clear()
+        for command in commands:
+            try:
+                spawn_web_asset(command)
+            except Exception as exc:
+                print(
+                    f"Could not spawn Isaac scene asset {command.get('id', '?')}: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+        if any(command.get("asset") == "kuka_allegro" for command in commands):
+            camera_target[0] = torch.tensor(
+                [0.15, 0.0, 0.72], dtype=torch.float32, device=env.unwrapped.device
+            )
+            camera_state["distance"] = max(camera_state["distance"], 3.4)
+            update_camera_pose()
+        print(f"Replaced Isaac web scene with {len(web_assets)} assets", flush=True)
 
     def apply_camera_commands() -> None:
         camera_changed = False
@@ -239,6 +296,8 @@ try:
                     camera_changed = True
                 elif command_type == "scene_spawn":
                     spawn_web_asset(command)
+                elif command_type == "scene_replace":
+                    replace_web_scene(command.get("assets", []))
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 print(f"Ignoring invalid Isaac web command: {exc}", flush=True)
             except Exception as exc:

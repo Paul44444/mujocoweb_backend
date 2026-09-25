@@ -54,6 +54,7 @@ SCENE_ASSETS = [
     {"id": "sphere", "name": "Sphere", "asset": "sphere", "scale": [0.04, 0.04, 0.04]},
     {"id": "cylinder", "name": "Cylinder", "asset": "cylinder", "scale": [0.03, 0.03, 0.06]},
     {"id": "hammer", "name": "Hammer", "asset": "hammer", "scale": [1.0, 1.0, 1.0]},
+    {"id": "kuka-allegro", "name": "KUKA LBR iiwa + Allegro", "asset": "kuka_allegro", "scale": [1.0, 1.0, 1.0]},
 ]
 MAX_CONTENT_BYTES = 150_000
 MAX_TREE_FILES = 2_000
@@ -80,10 +81,11 @@ class RestoreRequest(BaseModel):
 
 class SceneAsset(BaseModel):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,47}$")
-    asset: str = Field(pattern=r"^(box|sphere|cylinder|hammer)$")
+    asset: str = Field(pattern=r"^(box|sphere|cylinder|hammer|kuka_allegro)$")
     position: List[float] = Field(min_length=3, max_length=3)
     rotation: List[float] = Field(min_length=3, max_length=3)
     scale: List[float] = Field(min_length=3, max_length=3)
+    color: List[float] = Field(default_factory=lambda: [0.15, 0.55, 0.95], min_length=3, max_length=3)
 
 
 class SceneRequest(BaseModel):

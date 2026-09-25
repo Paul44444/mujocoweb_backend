@@ -274,7 +274,7 @@ def _editor_scene_model(scene_assets):
             "condim": "4",
             "friction": "1.0 0.015 0.001",
             "density": "300",
-            "rgba": "0.98 0.42 0.1 1",
+            "rgba": " ".join(str(value) for value in [*item.get("color", [0.98, 0.42, 0.1]), 1.0]),
         }
         if asset == "hammer":
             ET.SubElement(body, "geom", {**common, "type": "capsule", "fromto": "0 0 -0.065 0 0 0.065", "size": "0.012"})
