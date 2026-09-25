@@ -121,6 +121,28 @@ def _openai_json(path: str, payload: dict, timeout: int = 60) -> dict:
     raise RuntimeError("The AI service did not return a response.")
 
 
+def _openai_text_response(payload: dict, empty_message: str, timeout: int = 60) -> str:
+    """Return visible Responses API text, retrying token-limited empty results once."""
+    result = _openai_json("responses", payload, timeout=timeout)
+    output_text = _extract_output_text(result)
+    if output_text:
+        return output_text
+
+    incomplete_reason = (result.get("incomplete_details") or {}).get("reason")
+    if result.get("status") == "incomplete" and incomplete_reason == "max_output_tokens":
+        retry_payload = dict(payload)
+        retry_payload["max_output_tokens"] = max(int(payload.get("max_output_tokens", 0)) * 2, 3_200)
+        result = _openai_json("responses", retry_payload, timeout=timeout)
+        output_text = _extract_output_text(result)
+        if output_text:
+            return output_text
+
+    status = result.get("status", "unknown")
+    reason = (result.get("incomplete_details") or {}).get("reason", "none")
+    print(f"OpenAI response contained no visible text (status={status}, reason={reason}).", flush=True)
+    raise RuntimeError(empty_message)
+
+
 def _is_flagged(text: str) -> bool:
     if LOCAL_BLOCK_PATTERN.search(text):
         return True
@@ -222,10 +244,11 @@ def _generate_scene(scene_request: SceneBuildRequest) -> dict:
     else:
         catalog = "box, sphere, cylinder, hammer. Place objects around x=-0.25..0.25, y=-0.25..0.25 and z near their half-height."
     current_scene = json.dumps(scene_request.current_assets[:16], separators=(",", ":"))
-    result = _openai_json("responses", {
+    output_text = _openai_text_response({
         "model": os.environ.get("OPENAI_ASSISTANT_MODEL", os.environ.get("OPENAI_MODEL", "gpt-5-mini")),
         "store": False,
-        "max_output_tokens": 1_600,
+        "max_output_tokens": 2_400,
+        "reasoning": {"effort": "minimal"},
         "instructions": (
             "You design compact robotics simulation scenes from natural-language requests. "
             "Return only the requested structured scene. Use meaningful unique IDs. Interpret add/keep/replace wording carefully: "
@@ -238,10 +261,7 @@ def _generate_scene(scene_request: SceneBuildRequest) -> dict:
             f"Current scene assets: {current_scene}\nUser scene request: {scene_request.prompt}"
         ),
         "text": {"format": {"type": "json_schema", "name": "robotics_scene", "strict": True, "schema": SCENE_SCHEMA}},
-    })
-    output_text = _extract_output_text(result)
-    if not output_text:
-        raise RuntimeError("The AI service returned no scene proposal.")
+    }, "The AI service returned no scene proposal.")
     return _clean_scene(json.loads(output_text), scene_request.engine)
 
 
@@ -261,10 +281,11 @@ def _ask_openai(chat: AssistantRequest) -> str:
         "role": "user",
         "content": "\n\n".join(context) + "\n\nUser request:\n" + chat.prompt,
     })
-    result = _openai_json("responses", {
+    reply = _openai_text_response({
         "model": os.environ.get("OPENAI_ASSISTANT_MODEL", os.environ.get("OPENAI_MODEL", "gpt-5-mini")),
         "store": False,
-        "max_output_tokens": 800,
+        "max_output_tokens": 1_200,
+        "reasoning": {"effort": "minimal"},
         "instructions": (
             "You are the concise engineering assistant inside a robotics simulation website. "
             "Help with Python, MuJoCo, DAPG, NVIDIA Isaac Lab, reinforcement learning, scene setup, "
@@ -275,10 +296,7 @@ def _ask_openai(chat: AssistantRequest) -> str:
             "file and explain the smallest safe change. Answer in the language used by the user."
         ),
         "input": input_messages,
-    })
-    reply = _extract_output_text(result)
-    if not reply:
-        raise RuntimeError("The AI service returned an empty response.")
+    }, "The AI service returned an empty response.")
     return reply
 
 
