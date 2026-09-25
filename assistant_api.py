@@ -103,14 +103,22 @@ def _openai_json(path: str, payload: dict, timeout: int = 60) -> dict:
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(api_request, timeout=timeout) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:400]
-        raise RuntimeError(f"OpenAI request failed ({exc.code}): {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError("The backend could not reach the AI service.") from exc
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(api_request, timeout=timeout) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            if attempt == 0 and (exc.code == 429 or 500 <= exc.code < 600):
+                time.sleep(1.2)
+                continue
+            raise RuntimeError(f"OpenAI request failed ({exc.code}): {detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt == 0:
+                time.sleep(1.2)
+                continue
+            raise RuntimeError("The backend could not reach the AI service.") from exc
+    raise RuntimeError("The AI service did not return a response.")
 
 
 def _is_flagged(text: str) -> bool:
