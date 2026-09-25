@@ -1,0 +1,16 @@
+[Unit]
+Description=MuJoCo Web persistent Isaac Lab GPU renderer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/paul/IsaacLab
+ExecStart=/home/paul/miniconda3/envs/env_isaaclab1/bin/python /home/paul/PycharmProjects/dapg/isaac_web_worker.py --device cuda:0
+Restart=on-failure
+RestartSec=8
+TimeoutStopSec=35
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

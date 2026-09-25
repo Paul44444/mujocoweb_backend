@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict, deque
 import json
 import os
+from pathlib import Path
 from editor_api import SceneAsset, _authorize as authorize_editor, router as editor_router
 import queue
 import re
@@ -61,7 +62,7 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
     10_000,
 )
 
-app = FastAPI(title="MuJoCo Web Backend")
+app = FastAPI(title="MuJoCo + Isaac Lab Web Backend")
 app.include_router(editor_router)
 PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users(?:/[^/]+/scenes(?:/[^/]+)?)?$")
 
@@ -92,6 +93,10 @@ DEFAULT_FRONTEND_ORIGINS = (
     "http://127.0.0.1:5173",
     "https://mujocoweb.vercel.app",
 )
+ISAAC_OUTPUT_DIRECTORY = os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocoweb-isaac")
+ISAAC_FRAME_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "frame.jpg")
+ISAAC_METADATA_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "metadata.json")
+ISAAC_STATUS_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "status.json")
 frontend_origins = [
     origin.strip().rstrip("/")
     for origin in os.environ.get(
@@ -112,7 +117,91 @@ app.add_middleware(
 
 @app.get("/")
 def root() -> Dict[str, str]:
-    return {"status": "MuJoCo backend is running"}
+    return {"status": "MuJoCo and Isaac Lab backend gateway is running"}
+
+
+async def stream_isaac_simulation(websocket: WebSocket) -> None:
+    """Relay frames from the persistent Isaac Lab process to one browser."""
+    await websocket.send_json(
+        {
+            "type": "status",
+            "status": "simulation_started",
+            "engine": "isaaclab",
+            "task": "Isaac-Lift-Cube-Franka-v0",
+        }
+    )
+    last_frame_mtime = 0
+    waiting_since = time.monotonic()
+    loop = asyncio.get_running_loop()
+    paused = asyncio.Event()
+    disconnected = asyncio.Event()
+
+    async def receive_commands() -> None:
+        while True:
+            try:
+                command = await websocket.receive_json()
+            except WebSocketDisconnect:
+                disconnected.set()
+                return
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                disconnected.set()
+                return
+            if command.get("type") == "set_paused":
+                if command.get("paused") is True:
+                    paused.set()
+                elif command.get("paused") is False:
+                    paused.clear()
+
+    receiver_task = asyncio.create_task(receive_commands())
+
+    try:
+        while not disconnected.is_set():
+            if paused.is_set():
+                await asyncio.sleep(0.05)
+                continue
+            try:
+                frame_stat = await loop.run_in_executor(None, os.stat, ISAAC_FRAME_PATH)
+            except FileNotFoundError:
+                if time.monotonic() - waiting_since > 180:
+                    status = "Isaac Lab worker did not become ready."
+                    try:
+                        with open(ISAAC_STATUS_PATH, encoding="utf-8") as status_file:
+                            status_data = json.load(status_file)
+                        status = f"Isaac Lab worker status: {status_data.get('status', 'unknown')}"
+                    except (OSError, ValueError):
+                        pass
+                    await websocket.send_json({"type": "error", "message": status})
+                    return
+                await asyncio.sleep(0.25)
+                continue
+
+            if frame_stat.st_mtime_ns == last_frame_mtime:
+                await asyncio.sleep(0.025)
+                continue
+
+            last_frame_mtime = frame_stat.st_mtime_ns
+            jpeg_bytes = await loop.run_in_executor(None, Path(ISAAC_FRAME_PATH).read_bytes)
+            metadata: dict[str, Any] = {}
+            try:
+                metadata_bytes = await loop.run_in_executor(None, Path(ISAAC_METADATA_PATH).read_bytes)
+                metadata = json.loads(metadata_bytes)
+            except (OSError, ValueError, TypeError):
+                pass
+            await websocket.send_text(json.dumps({"type": "frame_metadata", **metadata}))
+            await websocket.send_bytes(jpeg_bytes)
+    except WebSocketDisconnect:
+        print("Browser disconnected from Isaac Lab stream", flush=True)
+    except Exception:
+        print("Isaac Lab WebSocket relay crashed:", flush=True)
+        traceback.print_exc()
+    finally:
+        receiver_task.cancel()
+        try:
+            await receiver_task
+        except asyncio.CancelledError:
+            pass
 
 
 class ObjectPrompt(BaseModel):
@@ -146,6 +235,16 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     print("WebSocket connection attempt received", flush=True)
 
     await websocket.accept()
+
+    engine = websocket.query_params.get("engine", "mujoco").lower()
+    if engine == "isaaclab":
+        print("Browser connected to persistent Isaac Lab stream", flush=True)
+        await stream_isaac_simulation(websocket)
+        return
+    if engine != "mujoco":
+        await websocket.send_json({"type": "error", "message": f"Unknown simulation engine: {engine}"})
+        await websocket.close(code=1008)
+        return
 
     task_id = websocket.query_params.get("task", "relocate").lower()
     editor_mode = websocket.query_params.get("editor") == "1"
