@@ -48,6 +48,8 @@ output_directory.mkdir(parents=True, exist_ok=True)
 frame_path = output_directory / "frame.jpg"
 metadata_path = output_directory / "metadata.json"
 status_path = output_directory / "status.json"
+control_directory = output_directory / "commands"
+control_directory.mkdir(parents=True, exist_ok=True)
 stopping = False
 
 
@@ -97,6 +99,65 @@ try:
     )
     env = gym.make(args.task, cfg=env_cfg)
     env.reset()
+    camera = env.unwrapped.scene["web_camera"]
+    camera_target = torch.tensor(
+        [[0.45, 0.0, 0.45]], dtype=torch.float32, device=env.unwrapped.device
+    )
+    default_camera = (62.0, 20.0, 2.15)
+    camera_state = {
+        "azimuth": default_camera[0],
+        "elevation": default_camera[1],
+        "distance": default_camera[2],
+    }
+
+    def update_camera_pose() -> None:
+        azimuth = math.radians(camera_state["azimuth"])
+        elevation = math.radians(camera_state["elevation"])
+        horizontal_distance = camera_state["distance"] * math.cos(elevation)
+        camera_position = torch.tensor(
+            [[
+                float(camera_target[0, 0]) + horizontal_distance * math.cos(azimuth),
+                float(camera_target[0, 1]) + horizontal_distance * math.sin(azimuth),
+                float(camera_target[0, 2]) + camera_state["distance"] * math.sin(elevation),
+            ]],
+            dtype=torch.float32,
+            device=env.unwrapped.device,
+        )
+        camera.set_world_poses_from_view(camera_position, camera_target)
+
+    def apply_camera_commands() -> None:
+        camera_changed = False
+        for command_path in sorted(control_directory.glob("*.json")):
+            try:
+                command = json.loads(command_path.read_text(encoding="utf-8"))
+                command_type = command.get("type")
+                if command_type == "camera_orbit":
+                    camera_state["azimuth"] -= float(command["delta_x"]) * 0.25
+                    camera_state["elevation"] = max(
+                        -10.0,
+                        min(85.0, camera_state["elevation"] + float(command["delta_y"]) * 0.2),
+                    )
+                    camera_changed = True
+                elif command_type == "camera_zoom":
+                    camera_state["distance"] = max(
+                        0.65,
+                        min(5.0, camera_state["distance"] * (1.12 ** float(command["delta"]))),
+                    )
+                    camera_changed = True
+                elif command_type == "camera_reset":
+                    camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
+                    camera_changed = True
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                pass
+            finally:
+                try:
+                    command_path.unlink()
+                except FileNotFoundError:
+                    pass
+        if camera_changed:
+            update_camera_pose()
+
+    update_camera_pose()
     atomic_json(
         status_path,
         {
@@ -110,6 +171,7 @@ try:
     episode = 0
     with torch.inference_mode():
         while simulation_app.is_running() and not stopping:
+            apply_camera_commands()
             phase = step * 0.018
             actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
             # A slow, bounded demonstration motion keeps the first web version
@@ -147,6 +209,12 @@ try:
                     "reward": float(rewards[0].item()),
                     "simulation_time": simulation_time,
                     "mode": "scripted_preview",
+                    "camera": {
+                        "azimuth": camera_state["azimuth"],
+                        "elevation": camera_state["elevation"],
+                        "distance": camera_state["distance"],
+                        "lookat": camera_target[0].tolist(),
+                    },
                 },
             )
             step += 1

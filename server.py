@@ -97,6 +97,7 @@ ISAAC_OUTPUT_DIRECTORY = os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocowe
 ISAAC_FRAME_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "frame.jpg")
 ISAAC_METADATA_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "metadata.json")
 ISAAC_STATUS_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "status.json")
+ISAAC_CONTROL_DIRECTORY = os.path.join(ISAAC_OUTPUT_DIRECTORY, "commands")
 frontend_origins = [
     origin.strip().rstrip("/")
     for origin in os.environ.get(
@@ -136,6 +137,16 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
     paused = asyncio.Event()
     disconnected = asyncio.Event()
 
+    def publish_command(command: dict[str, Any]) -> None:
+        """Atomically hand one camera command to the persistent Isaac worker."""
+        control_directory = Path(ISAAC_CONTROL_DIRECTORY)
+        control_directory.mkdir(parents=True, exist_ok=True)
+        command_name = f"{time.time_ns()}-{os.getpid()}.json"
+        control_path = control_directory / command_name
+        temporary_path = control_directory / f".{command_name}.next"
+        temporary_path.write_text(json.dumps(command), encoding="utf-8")
+        os.replace(temporary_path, control_path)
+
     async def receive_commands() -> None:
         while True:
             try:
@@ -153,6 +164,35 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                     paused.set()
                 elif command.get("paused") is False:
                     paused.clear()
+                continue
+
+            command_type = command.get("type")
+            try:
+                if command_type == "camera_reset":
+                    await loop.run_in_executor(
+                        None, publish_command, {"type": "camera_reset"}
+                    )
+                elif command_type == "camera_orbit":
+                    await loop.run_in_executor(
+                        None,
+                        publish_command,
+                        {
+                            "type": command_type,
+                            "delta_x": max(-100.0, min(100.0, float(command["deltaX"]))),
+                            "delta_y": max(-100.0, min(100.0, float(command["deltaY"]))),
+                        },
+                    )
+                elif command_type == "camera_zoom":
+                    await loop.run_in_executor(
+                        None,
+                        publish_command,
+                        {
+                            "type": command_type,
+                            "delta": max(-1.0, min(1.0, float(command["delta"]))),
+                        },
+                    )
+            except (KeyError, TypeError, ValueError, OSError):
+                pass
 
     receiver_task = asyncio.create_task(receive_commands())
 
