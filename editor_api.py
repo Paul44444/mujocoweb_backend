@@ -1,4 +1,4 @@
-"""Authenticated, allowlisted source editor for the personal MuJoCo demo.
+"""Authenticated, allowlisted source editor for the simulation web demo.
 
 This is intentionally disabled unless EDITOR_TOKEN is configured. Editing Python
 remains equivalent to running arbitrary code as the backend's OS user.
@@ -25,10 +25,28 @@ from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
-REPOSITORIES = {
+MUJOCO_REPOSITORIES = {
     "dapg": ROOT,
     "live-robohive": Path("/home/paul/robohive"),
 }
+ISAAC_REPOSITORIES = {
+    "isaac-web": ROOT,
+    "isaac-lift-task": Path("/home/paul/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/lift"),
+    "isaac-franka-robot": Path("/home/paul/IsaacLab/source/isaaclab_assets/isaaclab_assets/robots"),
+    "isaac-training": Path("/home/paul/IsaacLab/scripts/reinforcement_learning"),
+}
+REPOSITORIES = {**MUJOCO_REPOSITORIES, **ISAAC_REPOSITORIES}
+ENGINE_REPOSITORIES = {
+    "mujoco": tuple(MUJOCO_REPOSITORIES),
+    "isaaclab": tuple(ISAAC_REPOSITORIES),
+}
+# These roots deliberately expose only the files used by this web demo rather
+# than the unrelated contents of their parent directories.
+LIMITED_ROOT_FILES = {
+    "isaac-web": ("isaac_web_worker.py",),
+    "isaac-franka-robot": ("franka.py",),
+}
+ISAAC_RUNTIME_ROOTS = {"isaac-web", "isaac-lift-task", "isaac-franka-robot"}
 BACKUP_DIR = Path(os.environ.get("EDITOR_BACKUP_DIR", "/home/paul/.local/share/mujocoweb-editor-backups"))
 SCENE_DIR = Path(os.environ.get("MUJOCOWEB_SCENE_DIR", "/home/paul/.local/share/mujocoweb-scenes"))
 SCENE_ASSETS = [
@@ -170,12 +188,32 @@ def _tree_node(root_id: str, directory: Path, relative_path: Path, file_counter:
     return {"kind": "directory", "name": relative_path.name or root_id, "children": children}
 
 
-def _repository_tree() -> list[dict]:
-    return [
-        _tree_node(root_id, root, Path(), [0])
-        for root_id, root in REPOSITORIES.items()
-        if root.is_dir()
-    ]
+def _repository_tree(engine: str) -> list[dict]:
+    repository_ids = ENGINE_REPOSITORIES.get(engine)
+    if repository_ids is None:
+        raise HTTPException(status_code=400, detail="Unknown simulation engine")
+    roots = []
+    for root_id in repository_ids:
+        root = REPOSITORIES[root_id]
+        if not root.is_dir():
+            continue
+        limited_files = LIMITED_ROOT_FILES.get(root_id)
+        if limited_files is None:
+            node = _tree_node(root_id, root, Path(), [0])
+        else:
+            children = []
+            for relative_name in limited_files:
+                candidate = root / relative_name
+                if candidate.is_file() and candidate.stat().st_size <= MAX_CONTENT_BYTES:
+                    children.append({
+                        "kind": "file",
+                        "name": candidate.name,
+                        "id": f"{root_id}:{relative_name}",
+                    })
+            node = {"kind": "directory", "name": root_id, "children": children}
+        if node and node["children"]:
+            roots.append(node)
+    return roots
 
 
 def _find_definition(file_id: str, symbol: str) -> Optional[dict]:
@@ -183,13 +221,19 @@ def _find_definition(file_id: str, symbol: str) -> Optional[dict]:
     root_id, _, _ = file_id.partition(":")
     root = REPOSITORIES[root_id]
     candidates = [path]
-    candidates.extend(
-        candidate for candidate in root.rglob("*.py")
-        if candidate != path
-        and not candidate.is_symlink()
-        and not any(part in IGNORED_DIRECTORIES or part.startswith(".") for part in candidate.relative_to(root).parts)
-        and candidate.stat().st_size <= MAX_CONTENT_BYTES
-    )
+    if root_id in LIMITED_ROOT_FILES:
+        candidates.extend(
+            root / relative_name for relative_name in LIMITED_ROOT_FILES[root_id]
+            if (root / relative_name) != path and (root / relative_name).suffix == ".py"
+        )
+    else:
+        candidates.extend(
+            candidate for candidate in root.rglob("*.py")
+            if candidate != path
+            and not candidate.is_symlink()
+            and not any(part in IGNORED_DIRECTORIES or part.startswith(".") for part in candidate.relative_to(root).parts)
+            and candidate.stat().st_size <= MAX_CONTENT_BYTES
+        )
     for candidate in candidates:
         try:
             tree = ast.parse(candidate.read_text(encoding="utf-8"), filename=str(candidate))
@@ -262,18 +306,42 @@ def _replace(path: Path, content: str) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def _restart_service() -> None:
-    # The local systemd user service has Restart=on-failure. Do this only after
-    # the HTTP response has been sent, so the caller knows the save succeeded.
-    if os.environ.get("EDITOR_RESTART_ON_SAVE", "1") != "0":
-        time.sleep(1)
-        os._exit(75)
+def _runtime_for_file(file_id: str) -> Optional[str]:
+    root_id, _, _ = file_id.partition(":")
+    if root_id in ISAAC_RUNTIME_ROOTS:
+        return "isaaclab"
+    if root_id == "isaac-training":
+        return None
+    return "mujoco"
+
+
+def _restart_runtime(runtime: str) -> None:
+    # Run only after the HTTP response has been sent, so the editor knows that
+    # its atomic save and backup completed before a process disappears.
+    if os.environ.get("EDITOR_RESTART_ON_SAVE", "1") == "0":
+        return
+    time.sleep(1)
+    if runtime == "isaaclab":
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "restart", "mujocoweb-isaac.service"],
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return
+    # The web backend service has Restart=on-failure.
+    os._exit(75)
 
 
 @router.get("/tree")
-def get_repository_tree(authorization: Optional[str] = Header(default=None)) -> dict:
+def get_repository_tree(
+    engine: str = "mujoco",
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
     _authorize(authorization)
-    return {"roots": _repository_tree()}
+    return {"engine": engine, "roots": _repository_tree(engine)}
 
 
 @router.get("/scenes")
@@ -389,11 +457,15 @@ def get_definition(
 
 
 @router.get("/logs")
-def get_backend_logs(authorization: Optional[str] = Header(default=None)) -> dict:
+def get_backend_logs(
+    engine: str = "mujoco",
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
     _authorize(authorization)
+    unit = "mujocoweb-isaac.service" if engine == "isaaclab" else "mujocoweb-backend.service"
     try:
         result = subprocess.run(
-            ["journalctl", "--user", "--unit=mujocoweb-backend.service",
+            ["journalctl", "--user", f"--unit={unit}",
              "--lines=2000", "--no-pager", "--output=short-iso"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -446,11 +518,13 @@ def save_file(
         if _sha(current) != request.expected_sha256:
             raise HTTPException(status_code=409, detail="File changed; reload before saving")
         if current == request.content:
-            return {"sha256": _sha(current), "restarting": False}
+            return {"sha256": _sha(current), "restarting": False, "runtime": None}
         _save_backup(file_id, current)
         _replace(path, request.content)
-    background_tasks.add_task(_restart_service)
-    return {"sha256": _sha(request.content), "restarting": True}
+    runtime = _runtime_for_file(file_id)
+    if runtime is not None:
+        background_tasks.add_task(_restart_runtime, runtime)
+    return {"sha256": _sha(request.content), "restarting": runtime is not None, "runtime": runtime}
 
 
 @router.post("/files/restore/{file_id:path}")
@@ -475,5 +549,7 @@ def restore_file(
             raise HTTPException(status_code=409, detail="File changed; reload before restoring")
         _save_backup(file_id, current)
         _replace(path, restored)
-    background_tasks.add_task(_restart_service)
-    return {"sha256": _sha(restored), "restarting": True}
+    runtime = _runtime_for_file(file_id)
+    if runtime is not None:
+        background_tasks.add_task(_restart_runtime, runtime)
+    return {"sha256": _sha(restored), "restarting": runtime is not None, "runtime": runtime}
