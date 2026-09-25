@@ -100,9 +100,10 @@ try:
     env = gym.make(args.task, cfg=env_cfg)
     env.reset()
     camera = env.unwrapped.scene["web_camera"]
-    camera_target = torch.tensor(
+    default_camera_target = torch.tensor(
         [[0.45, 0.0, 0.45]], dtype=torch.float32, device=env.unwrapped.device
     )
+    camera_target = default_camera_target.clone()
     default_camera = (62.0, 20.0, 2.15)
     camera_state = {
         "azimuth": default_camera[0],
@@ -210,6 +211,22 @@ try:
                         min(85.0, camera_state["elevation"] + float(command["delta_y"]) * 0.2),
                     )
                     camera_changed = True
+                elif command_type == "camera_pan":
+                    camera_metadata = render_camera_metadata()
+                    forward = np.asarray(camera_metadata["forward"], dtype=np.float64)
+                    up = np.asarray(camera_metadata["up"], dtype=np.float64)
+                    right = np.cross(forward, up)
+                    scale = camera_state["distance"] * 0.0012
+                    translation = (
+                        -right * float(command["delta_x"]) * scale
+                        + up * float(command["delta_y"]) * scale
+                    )
+                    target = np.asarray(camera_target[0].tolist()) + translation
+                    target = np.clip(target, (-1.5, -2.0, -0.5), (2.5, 2.0, 2.0))
+                    camera_target[0] = torch.as_tensor(
+                        target, dtype=torch.float32, device=env.unwrapped.device
+                    )
+                    camera_changed = True
                 elif command_type == "camera_zoom":
                     camera_state["distance"] = max(
                         0.65,
@@ -218,6 +235,7 @@ try:
                     camera_changed = True
                 elif command_type == "camera_reset":
                     camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
+                    camera_target.copy_(default_camera_target)
                     camera_changed = True
                 elif command_type == "scene_spawn":
                     spawn_web_asset(command)

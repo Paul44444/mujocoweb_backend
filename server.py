@@ -172,7 +172,7 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                     await loop.run_in_executor(
                         None, publish_command, {"type": "camera_reset"}
                     )
-                elif command_type == "camera_orbit":
+                elif command_type in {"camera_orbit", "camera_pan"}:
                     await loop.run_in_executor(
                         None,
                         publish_command,
