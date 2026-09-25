@@ -108,7 +108,9 @@ try:
         "azimuth": default_camera[0],
         "elevation": default_camera[1],
         "distance": default_camera[2],
+        "position": [1.4, 1.8, 1.2],
     }
+    web_assets = []
 
     def update_camera_pose() -> None:
         azimuth = math.radians(camera_state["azimuth"])
@@ -124,6 +126,76 @@ try:
             device=env.unwrapped.device,
         )
         camera.set_world_poses_from_view(camera_position, camera_target)
+        camera_state["position"] = camera_position[0].tolist()
+
+    def render_camera_metadata() -> dict:
+        position = np.asarray(camera_state["position"], dtype=np.float64)
+        target = np.asarray(camera_target[0].tolist(), dtype=np.float64)
+        forward = target - position
+        forward /= np.linalg.norm(forward)
+        right = np.cross(forward, np.asarray([0.0, 0.0, 1.0]))
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
+        half_width = 20.955 / (2.0 * 24.0)
+        half_height = half_width * 720.0 / 1280.0
+        return {
+            "position": position.tolist(),
+            "forward": forward.tolist(),
+            "up": up.tolist(),
+            "near": 1.0,
+            "top": half_height,
+            "bottom": -half_height,
+            "center": 0.0,
+        }
+
+    def spawn_web_asset(command: dict) -> None:
+        if len(web_assets) >= 32:
+            print("Ignoring Isaac web asset: the 32-object limit was reached", flush=True)
+            return
+        asset = command["asset"]
+        position = [float(value) for value in command["position"]]
+        heights = {"box": 0.035, "sphere": 0.035, "cylinder": 0.035}
+        position[2] = max(position[2], heights[asset] + 0.006)
+        colors = {
+            "box": (0.15, 0.55, 0.95),
+            "sphere": (0.95, 0.35, 0.18),
+            "cylinder": (0.35, 0.8, 0.35),
+        }
+        common = {
+            "rigid_props": sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=2,
+                max_depenetration_velocity=3.0,
+                disable_gravity=False,
+            ),
+            "mass_props": sim_utils.MassPropertiesCfg(mass=0.12),
+            "collision_props": sim_utils.CollisionPropertiesCfg(
+                collision_enabled=True,
+                contact_offset=0.004,
+                rest_offset=0.0,
+            ),
+            "visual_material": sim_utils.PreviewSurfaceCfg(
+                diffuse_color=colors[asset], metallic=0.05, roughness=0.35
+            ),
+            "physics_material": sim_utils.RigidBodyMaterialCfg(
+                static_friction=0.6,
+                dynamic_friction=0.45,
+                restitution=0.12,
+            ),
+        }
+        if asset == "box":
+            spawn_cfg = sim_utils.CuboidCfg(size=(0.07, 0.07, 0.07), **common)
+        elif asset == "sphere":
+            spawn_cfg = sim_utils.SphereCfg(radius=0.035, **common)
+        else:
+            spawn_cfg = sim_utils.CylinderCfg(radius=0.032, height=0.07, axis="Z", **common)
+        prim_path = f"/World/envs/env_0/WebAsset_{len(web_assets) + 1}"
+        spawn_cfg.func(prim_path, spawn_cfg, translation=tuple(position))
+        web_assets.append({"id": command["id"], "asset": asset, "prim_path": prim_path})
+        print(
+            f"Spawned Isaac web asset {command['id']} ({asset}) at {position}",
+            flush=True,
+        )
 
     def apply_camera_commands() -> None:
         camera_changed = False
@@ -147,8 +219,12 @@ try:
                 elif command_type == "camera_reset":
                     camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
                     camera_changed = True
-            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-                pass
+                elif command_type == "scene_spawn":
+                    spawn_web_asset(command)
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                print(f"Ignoring invalid Isaac web command: {exc}", flush=True)
+            except Exception as exc:
+                print(f"Isaac web command failed: {type(exc).__name__}: {exc}", flush=True)
             finally:
                 try:
                     command_path.unlink()
@@ -215,6 +291,8 @@ try:
                         "distance": camera_state["distance"],
                         "lookat": camera_target[0].tolist(),
                     },
+                    "render_camera": render_camera_metadata(),
+                    "web_assets": web_assets,
                 },
             )
             step += 1

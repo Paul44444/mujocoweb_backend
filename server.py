@@ -191,6 +191,28 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                             "delta": max(-1.0, min(1.0, float(command["delta"]))),
                         },
                     )
+                elif command_type == "scene_spawn":
+                    asset_id = str(command["id"])
+                    asset = str(command["asset"])
+                    position = [float(value) for value in command["position"]]
+                    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,47}", asset_id):
+                        raise ValueError("Invalid asset id")
+                    if asset not in {"box", "sphere", "cylinder"} or len(position) != 3:
+                        raise ValueError("Invalid Isaac asset")
+                    if not all(np.isfinite(value) for value in position):
+                        raise ValueError("Invalid asset position")
+                    if not (0.02 <= position[0] <= 0.98 and -0.45 <= position[1] <= 0.45):
+                        raise ValueError("Asset position is outside the table")
+                    await loop.run_in_executor(
+                        None,
+                        publish_command,
+                        {
+                            "type": command_type,
+                            "id": asset_id,
+                            "asset": asset,
+                            "position": position,
+                        },
+                    )
             except (KeyError, TypeError, ValueError, OSError):
                 pass
 
