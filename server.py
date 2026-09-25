@@ -24,7 +24,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from assistant_api import router as assistant_router
 from object_generator import generate_object, validate_object_spec
+from public_ai_quota import claim_public_ai_request
 
 
 def _integer_setting(
@@ -64,6 +66,7 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 
 app = FastAPI(title="MuJoCo + Isaac Lab Web Backend")
 app.include_router(editor_router)
+app.include_router(assistant_router)
 PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users(?:/[^/]+/scenes(?:/[^/]+)?)?$")
 PUBLIC_EDITOR_READ_PATH = re.compile(
     r"^/api/editor/(?:tree|logs|definitions|files/[^/].*)$"
@@ -288,6 +291,7 @@ def generate_simulation_object(prompt: ObjectPrompt, request: Request) -> Dict[s
             raise HTTPException(status_code=429, detail="Generation limit reached. Please try again later.")
         requests.append(now)
     try:
+        claim_public_ai_request("object-generator")
         return generate_object(prompt.description)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
