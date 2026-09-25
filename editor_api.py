@@ -61,6 +61,9 @@ EDITABLE_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".tx
 IGNORED_DIRECTORIES = {".git", ".mypy_cache", ".pytest_cache", ".venv", "__pycache__", "logs", "iterations"}
 REVISION_PATTERN = re.compile(r"^[0-9]{14}-[0-9a-f]{12}$")
 USER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$")
+PUBLIC_LOG_SECRET_PATTERN = re.compile(
+    r"(?i)(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+[A-Za-z0-9._~-]{16,}|(?:OPENAI_API_KEY|EDITOR_TOKEN)\s*=\s*\S+)"
+)
 router = APIRouter(prefix="/api/editor", tags=["editor"])
 write_lock = threading.Lock()
 
@@ -338,10 +341,14 @@ def _restart_runtime(runtime: str) -> None:
 @router.get("/tree")
 def get_repository_tree(
     engine: str = "mujoco",
-    authorization: Optional[str] = Header(default=None),
 ) -> dict:
-    _authorize(authorization)
     return {"engine": engine, "roots": _repository_tree(engine)}
+
+
+@router.get("/auth")
+def authenticate_owner(authorization: Optional[str] = Header(default=None)) -> dict:
+    _authorize(authorization)
+    return {"authenticated": True}
 
 
 @router.get("/scenes")
@@ -445,9 +452,7 @@ def save_scene(name: str, request: SceneRequest, authorization: Optional[str] = 
 def get_definition(
     file_id: str,
     symbol: str,
-    authorization: Optional[str] = Header(default=None),
 ) -> dict:
-    _authorize(authorization)
     if not re.fullmatch(r"[A-Za-z_]\w*", symbol):
         raise HTTPException(status_code=400, detail="Invalid Python symbol")
     result = _find_definition(file_id, symbol)
@@ -459,9 +464,7 @@ def get_definition(
 @router.get("/logs")
 def get_backend_logs(
     engine: str = "mujoco",
-    authorization: Optional[str] = Header(default=None),
 ) -> dict:
-    _authorize(authorization)
     unit = "mujocoweb-isaac.service" if engine == "isaaclab" else "mujocoweb-backend.service"
     try:
         result = subprocess.run(
@@ -478,12 +481,12 @@ def get_backend_logs(
         raise HTTPException(status_code=503, detail="Backend logs are unavailable") from exc
     if result.returncode != 0:
         raise HTTPException(status_code=503, detail="Backend logs are unavailable")
-    return {"logs": result.stdout[-500_000:]}
+    public_logs = PUBLIC_LOG_SECRET_PATTERN.sub("[redacted secret]", result.stdout[-500_000:])
+    return {"logs": public_logs}
 
 
 @router.get("/files/{file_id:path}")
-def get_file(file_id: str, authorization: Optional[str] = Header(default=None)) -> dict:
-    _authorize(authorization)
+def get_file(file_id: str) -> dict:
     path, description = _file(file_id)
     content = _read(path)
     folder = BACKUP_DIR / hashlib.sha256(file_id.encode("utf-8")).hexdigest()

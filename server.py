@@ -65,12 +65,16 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 app = FastAPI(title="MuJoCo + Isaac Lab Web Backend")
 app.include_router(editor_router)
 PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users(?:/[^/]+/scenes(?:/[^/]+)?)?$")
+PUBLIC_EDITOR_READ_PATH = re.compile(
+    r"^/api/editor/(?:tree|logs|definitions|files/[^/].*)$"
+)
 
 
 @app.middleware("http")
 async def guard_editor_requests(request: Request, call_next):
     if request.url.path.startswith("/api/editor") and request.method != "OPTIONS":
-        if not PUBLIC_SCENE_PATH.fullmatch(request.url.path):
+        public_read = request.method == "GET" and PUBLIC_EDITOR_READ_PATH.fullmatch(request.url.path)
+        if not PUBLIC_SCENE_PATH.fullmatch(request.url.path) and not public_read:
             try:
                 authorize_editor(request.headers.get("authorization"))
             except HTTPException as exc:
