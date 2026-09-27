@@ -424,6 +424,19 @@ def save_user_scene(user: str, name: str, request: SceneRequest) -> dict:
     return {"user": user, "name": name, "assets": len(request.assets)}
 
 
+@router.delete("/users/{user}/scenes/{name}")
+def delete_user_scene(user: str, name: str) -> dict:
+    """Delete one saved scene while retaining the recoverable starter scene."""
+    if name == "DAPG Relocate Start":
+        raise HTTPException(status_code=409, detail="The starter scene cannot be deleted")
+    path = _user_scene_path(user, name)
+    with write_lock:
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Scene not found")
+        path.unlink()
+    return {"user": user, "name": name, "deleted": True}
+
+
 @router.get("/scenes/{name}")
 def get_scene(name: str, authorization: Optional[str] = Header(default=None)) -> dict:
     _authorize(authorization)
