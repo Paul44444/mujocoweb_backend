@@ -114,6 +114,10 @@ try:
         "position": [1.4, 1.8, 1.2],
     }
     web_assets = []
+    # Never reuse a USD prim path during the worker lifetime. Hydra/RTX keeps
+    # renderer-side mesh caches, and removing then recreating (for example)
+    # WebAsset_1 with a different geometry can corrupt unrelated visuals.
+    web_asset_serial = [0]
 
     def euler_degrees_to_quaternion(rotation: list[float]) -> tuple[float, float, float, float]:
         roll, pitch, yaw = (math.radians(float(value)) * 0.5 for value in rotation)
@@ -179,7 +183,8 @@ try:
             "cylinder": (0.35, 0.8, 0.35),
         }
         color = tuple(float(value) for value in command.get("color", default_colors.get(asset, (0.8, 0.45, 0.12))))
-        prim_path = f"/World/envs/env_0/WebAsset_{len(web_assets) + 1}"
+        web_asset_serial[0] += 1
+        prim_path = f"/World/envs/env_0/WebAsset_{web_asset_serial[0]}"
         orientation = euler_degrees_to_quaternion(rotation)
         if asset == "kuka_allegro":
             spawn_cfg = KUKA_ALLEGRO_CFG.spawn
