@@ -60,6 +60,16 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
     pid = int(pid_data.get("pid", 0) or 0)
     if status.get("status") in {"starting", "training"} and pid and not _is_alive(pid):
         status = {**status, "status": "failed", "error": "Training process exited unexpectedly."}
+    if (
+        config.get("engine") == "isaaclab"
+        and status.get("status") == "completed"
+        and not metrics
+    ):
+        status = {
+            **status,
+            "status": "failed",
+            "error": "Isaac Lab exited before producing a training iteration. Check the training log for the GPU error.",
+        }
     checkpoints = sorted(
         list((run_directory / "checkpoints").glob("policy_*.pickle"))
         + list((run_directory / "checkpoints").glob("model_*.pt"))

@@ -102,6 +102,7 @@ def main() -> None:
     metrics: list[dict] = []
     current: dict = {}
     output_directory: Path | None = None
+    fatal_error: str | None = None
 
     def publish_current() -> None:
         nonlocal current, output_directory
@@ -155,6 +156,10 @@ def main() -> None:
         ]
         environment = os.environ.copy()
         environment["PYTHONUNBUFFERED"] = "1"
+        # run-local.sh deliberately leaves this empty for the MuJoCo process.
+        # An empty CUDA_VISIBLE_DEVICES hides every GPU from the child process.
+        if not environment.get("CUDA_VISIBLE_DEVICES", "").strip():
+            environment["CUDA_VISIBLE_DEVICES"] = "0"
         child = subprocess.Popen(
             command,
             cwd=str(ISAACLAB_ROOT),
@@ -170,6 +175,13 @@ def main() -> None:
         for raw_line in child.stdout:
             print(raw_line, end="", flush=True)
             line = ANSI_ESCAPE.sub("", raw_line).strip()
+            if any(marker in line for marker in (
+                "No CUDA GPUs are available",
+                "no CUDA-capable device is detected",
+                "No CUDA devices found",
+                "Error executing job with overrides",
+            )):
+                fatal_error = line
             iteration_match = re.search(r"Learning iteration\s+(\d+)\s*/\s*(\d+)", line)
             if iteration_match:
                 publish_current()
@@ -200,6 +212,8 @@ def main() -> None:
         checkpoint_names = sync_checkpoints(output_directory, checkpoints_directory)
         if stopping:
             final_status = "stopped"
+        elif fatal_error:
+            raise RuntimeError(fatal_error)
         elif return_code == 0:
             final_status = "completed"
         else:
