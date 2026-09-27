@@ -609,6 +609,21 @@ def run_simulation(
         interactive_camera.distance = camera_defaults["distance"]
         interactive_camera.lookat[:] = camera_defaults["lookat"]
 
+    def pan_camera(delta_x, delta_y):
+        azimuth = math.radians(interactive_camera.azimuth)
+        elevation = math.radians(interactive_camera.elevation)
+        offset = np.array([
+            math.cos(elevation) * math.cos(azimuth),
+            math.cos(elevation) * math.sin(azimuth),
+            math.sin(elevation),
+        ])
+        forward = -offset
+        right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
+        scale = interactive_camera.distance * 0.0012
+        interactive_camera.lookat[:] += -right * delta_x * scale + up * delta_y * scale
+
     reset_camera()
     if editor_mode and editor_camera:
         interactive_camera.azimuth = editor_camera["azimuth"]
@@ -633,6 +648,8 @@ def run_simulation(
                     if command.get("type") == "camera_orbit":
                         interactive_camera.azimuth -= command["delta_x"] * 0.25
                         interactive_camera.elevation = float(np.clip(interactive_camera.elevation - command["delta_y"] * 0.2, -85.0, -5.0))
+                    elif command.get("type") == "camera_pan":
+                        pan_camera(command["delta_x"], command["delta_y"])
                     elif command.get("type") == "camera_zoom":
                         interactive_camera.distance = float(np.clip(interactive_camera.distance * (1.12 ** command["delta"]), 0.45, 5.0))
                     elif command.get("type") == "camera_reset":
@@ -921,6 +938,9 @@ def run_simulation(
                     -85.0,
                     -5.0,
                 ))
+                changed = True
+            elif command["type"] == "camera_pan":
+                pan_camera(command["delta_x"], command["delta_y"])
                 changed = True
             elif command["type"] == "camera_zoom":
                 interactive_camera.distance = float(np.clip(

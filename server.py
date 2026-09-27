@@ -642,9 +642,9 @@ async def simulation_websocket(websocket: WebSocket) -> None:
                     pass
                 continue
 
-            if command_type in {"camera_orbit", "camera_zoom"}:
+            if command_type in {"camera_orbit", "camera_pan", "camera_zoom"}:
                 try:
-                    if command_type == "camera_orbit":
+                    if command_type in {"camera_orbit", "camera_pan"}:
                         command = {
                             "type": command_type,
                             "delta_x": max(-100.0, min(100.0, float(data["deltaX"]))),
