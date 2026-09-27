@@ -622,7 +622,7 @@ def run_simulation(
         right /= np.linalg.norm(right)
         up = np.cross(right, forward)
         scale = interactive_camera.distance * 0.0012
-        interactive_camera.lookat[:] += -right * delta_x * scale + up * delta_y * scale
+        interactive_camera.lookat[:] += right * delta_x * scale + up * delta_y * scale
 
     reset_camera()
     if editor_mode and editor_camera:
