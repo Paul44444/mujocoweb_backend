@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from assistant_api import router as assistant_router
+from training_api import router as training_router
 from object_generator import generate_object, validate_object_spec
 from public_ai_quota import claim_public_ai_request
 
@@ -67,6 +68,7 @@ PERFORMANCE_LOG_INTERVAL = _integer_setting(
 app = FastAPI(title="MuJoCo + Isaac Lab Web Backend")
 app.include_router(editor_router)
 app.include_router(assistant_router)
+app.include_router(training_router)
 PUBLIC_SCENE_PATH = re.compile(r"^/api/editor/users(?:/[^/]+/scenes(?:/[^/]+)?)?$")
 PUBLIC_EDITOR_READ_PATH = re.compile(
     r"^/api/editor/(?:tree|logs|definitions|files/[^/].*)$"
