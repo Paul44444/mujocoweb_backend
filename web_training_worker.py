@@ -58,6 +58,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop_worker)
 
     config = {
+        "engine": "mujoco",
         "environment": "relocate-v1",
         "algorithm": "DAPG fine-tuning",
         "reference_policy": str(REFERENCE_POLICY),
