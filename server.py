@@ -362,7 +362,7 @@ async def simulation_websocket(websocket: WebSocket) -> None:
     scene_assets = []
     editor_camera = None
     raw_camera = websocket.query_params.get("camera")
-    if editor_mode and raw_camera:
+    if raw_camera:
         try:
             if len(raw_camera) > 500:
                 raise ValueError("Camera data is too long")

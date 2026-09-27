@@ -625,7 +625,7 @@ def run_simulation(
         interactive_camera.lookat[:] += right * delta_x * scale + up * delta_y * scale
 
     reset_camera()
-    if editor_mode and editor_camera:
+    if editor_camera:
         interactive_camera.azimuth = editor_camera["azimuth"]
         interactive_camera.elevation = editor_camera["elevation"]
         interactive_camera.distance = editor_camera["distance"]
