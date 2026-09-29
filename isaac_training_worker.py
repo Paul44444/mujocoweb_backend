@@ -87,7 +87,12 @@ def main() -> None:
     metrics_path = run_directory / "metrics.json"
     started_at = time.time()
     run_name = f"web_{run_directory.name}"
+    try:
+        existing_config = json.loads((run_directory / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        existing_config = {}
     config = {
+        **existing_config,
         "engine": "isaaclab",
         "environment": TASK,
         "algorithm": "RSL-RL PPO",

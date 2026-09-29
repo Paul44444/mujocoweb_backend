@@ -83,6 +83,14 @@ def _checkpoint_path(checkpoint_id: str) -> Path:
     return path.resolve()
 
 
+def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
+    configured_name = str(config.get("name") or "").strip()
+    if configured_name:
+        return configured_name
+    legacy_match = re.fullmatch(r"\d{8}-\d{6}-(.+)-[0-9a-f]{6}", run_directory.name)
+    return legacy_match.group(1) if legacy_match else run_directory.name
+
+
 def _checkpoint_payloads() -> List[Dict[str, object]]:
     checkpoints = []
     if not RUNS_DIRECTORY.is_dir():
@@ -100,7 +108,7 @@ def _checkpoint_payloads() -> List[Dict[str, object]]:
                 "id": f"{run_directory.name}/{path.name}",
                 "run_id": run_directory.name,
                 "name": path.name,
-                "label": f"{config.get('name') or run_directory.name} · {path.name}",
+                "label": f"{_run_display_name(run_directory, config)} · {path.name}",
                 "modified_at": path.stat().st_mtime,
                 "deletable": True,
             })
@@ -147,6 +155,7 @@ def _sample_metrics(metrics: List[Dict[str, object]], maximum: int = 200) -> Lis
 def _run_payload(run_directory: Path) -> Dict[str, object]:
     status = _read_json(run_directory / "status.json", {"status": "unknown", "iteration": 0})
     config = _read_json(run_directory / "config.json", {})
+    config = {**config, "name": _run_display_name(run_directory, config)}
     metrics = _read_json(run_directory / "metrics.json", {"metrics": []}).get("metrics", [])
     pid_data = _read_json(run_directory / "process.json", {})
     pid = int(pid_data.get("pid", 0) or 0)
