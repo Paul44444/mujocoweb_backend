@@ -27,6 +27,7 @@ ISAAC_POLICY_SELECTION = ISAAC_OUTPUT_DIRECTORY / "selected_policy.json"
 ISAAC_STATUS_PATH = ISAAC_OUTPUT_DIRECTORY / "status.json"
 ISAAC_FRAME_PATH = ISAAC_OUTPUT_DIRECTORY / "frame.jpg"
 ISAAC_METADATA_PATH = ISAAC_OUTPUT_DIRECTORY / "metadata.json"
+ISAAC_CONTROL_DIRECTORY = ISAAC_OUTPUT_DIRECTORY / "commands"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 CHECKPOINT_PATTERN = re.compile(r"^model_\d+\.pt$")
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -118,6 +119,15 @@ def _restart_isaac_runtime() -> None:
         pass
 
 
+def _publish_isaac_command(command: Dict[str, object]) -> None:
+    ISAAC_CONTROL_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-{os.getpid()}-policy.json"
+    path = ISAAC_CONTROL_DIRECTORY / name
+    temporary = ISAAC_CONTROL_DIRECTORY / f".{name}.next"
+    temporary.write_text(json.dumps(command), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _run_payload(run_directory: Path) -> Dict[str, object]:
     status = _read_json(run_directory / "status.json", {"status": "unknown", "iteration": 0})
     config = _read_json(run_directory / "config.json", {})
@@ -206,6 +216,26 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
     temporary = ISAAC_POLICY_SELECTION.with_suffix(".json.next")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, ISAAC_POLICY_SELECTION)
+    current_status = _read_json(ISAAC_STATUS_PATH, {})
+    hot_swap = bool(
+        payload["id"]
+        and current_status.get("status") == "ready"
+        and current_status.get("mode") == "trained_policy"
+    )
+    if hot_swap:
+        status_temporary = ISAAC_STATUS_PATH.with_suffix(".json.next")
+        status_temporary.write_text(json.dumps({
+            **current_status,
+            "status": "switching_policy",
+            "requested_checkpoint": payload["id"],
+        }), encoding="utf-8")
+        os.replace(status_temporary, ISAAC_STATUS_PATH)
+        _publish_isaac_command({
+            "type": "policy_load",
+            "id": payload["id"],
+            "path": payload["path"],
+        })
+        return {"selected": payload["id"], "status": "switching_policy", "hot_swap": True}
     status_temporary = ISAAC_STATUS_PATH.with_suffix(".json.next")
     status_temporary.write_text(json.dumps({
         "status": "restarting",
@@ -214,7 +244,7 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
     }), encoding="utf-8")
     os.replace(status_temporary, ISAAC_STATUS_PATH)
     background_tasks.add_task(_restart_isaac_runtime)
-    return {"selected": payload["id"], "status": "restarting"}
+    return {"selected": payload["id"], "status": "restarting", "hot_swap": False, "estimated_seconds": 45}
 
 
 @router.post("/start")

@@ -125,6 +125,7 @@ try:
         "distance": default_camera[2],
         "position": [1.4, 1.8, 1.2],
     }
+    runner = None
     inference_policy = None
     policy_observations = None
     if checkpoint_id and checkpoint_path:
@@ -283,6 +284,7 @@ try:
         print(f"Replaced Isaac web scene with {len(web_assets)} assets", flush=True)
 
     def apply_camera_commands() -> None:
+        global runner, inference_policy, policy_observations, checkpoint_id, checkpoint_path
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -325,10 +327,36 @@ try:
                     spawn_web_asset(command)
                 elif command_type == "scene_replace":
                     replace_web_scene(command.get("assets", []))
+                elif command_type == "policy_load":
+                    if runner is None:
+                        raise RuntimeError("Live policy switching requires an already loaded trained policy")
+                    requested_path = Path(str(command["path"])).resolve()
+                    if not requested_path.is_file():
+                        raise FileNotFoundError(f"Policy checkpoint not found: {requested_path}")
+                    runner.load(str(requested_path))
+                    inference_policy = runner.get_inference_policy(device=env.unwrapped.device)
+                    policy_observations = env.get_observations()
+                    checkpoint_path = requested_path
+                    checkpoint_id = str(command["id"])
+                    atomic_json(status_path, {
+                        "status": "ready",
+                        "task": effective_task,
+                        "mode": "trained_policy",
+                        "checkpoint": checkpoint_id,
+                        "hot_swapped_at": time.time(),
+                    })
+                    print(f"Hot-swapped Isaac web policy to {checkpoint_id}", flush=True)
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 print(f"Ignoring invalid Isaac web command: {exc}", flush=True)
             except Exception as exc:
                 print(f"Isaac web command failed: {type(exc).__name__}: {exc}", flush=True)
+                if command.get("type") == "policy_load":
+                    atomic_json(status_path, {
+                        "status": "error",
+                        "mode": "trained_policy",
+                        "checkpoint": checkpoint_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
             finally:
                 try:
                     command_path.unlink()
