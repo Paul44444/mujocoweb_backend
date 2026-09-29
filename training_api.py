@@ -134,6 +134,16 @@ def _publish_isaac_command(command: Dict[str, object]) -> None:
     os.replace(temporary, path)
 
 
+def _sample_metrics(metrics: List[Dict[str, object]], maximum: int = 200) -> List[Dict[str, object]]:
+    """Return a bounded, whole-run sample while preserving both endpoints."""
+    if len(metrics) <= maximum:
+        return metrics
+    return [
+        metrics[round(index * (len(metrics) - 1) / (maximum - 1))]
+        for index in range(maximum)
+    ]
+
+
 def _run_payload(run_directory: Path) -> Dict[str, object]:
     status = _read_json(run_directory / "status.json", {"status": "unknown", "iteration": 0})
     config = _read_json(run_directory / "config.json", {})
@@ -160,7 +170,7 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
         "id": run_directory.name,
         "status": status,
         "config": config,
-        "metrics": metrics[-250:],
+        "metrics": _sample_metrics(metrics),
         "checkpoints": [path.name for path in checkpoints],
     }
 
