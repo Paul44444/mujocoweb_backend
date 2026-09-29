@@ -41,8 +41,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab_assets.robots import KUKA_ALLEGRO_CFG
 from isaaclab.sensors import CameraCfg
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from rsl_rl.runners import OnPolicyRunner
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
+from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 
 output_directory = Path(args.output_directory)
@@ -52,6 +55,14 @@ metadata_path = output_directory / "metadata.json"
 status_path = output_directory / "status.json"
 control_directory = output_directory / "commands"
 control_directory.mkdir(parents=True, exist_ok=True)
+policy_selection_path = output_directory / "selected_policy.json"
+policy_selection = {}
+try:
+    policy_selection = json.loads(policy_selection_path.read_text(encoding="utf-8"))
+except (OSError, ValueError, TypeError):
+    pass
+checkpoint_path = Path(policy_selection.get("path", "")) if policy_selection.get("path") else None
+checkpoint_id = policy_selection.get("id") if checkpoint_path and checkpoint_path.is_file() else None
 stopping = False
 
 
@@ -77,7 +88,8 @@ atomic_json(status_path, {"status": "starting", "task": args.task})
 env = None
 started_at = time.monotonic()
 try:
-    env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=1)
+    effective_task = "Isaac-Lift-Cube-Franka-Play-v0" if checkpoint_id else args.task
+    env_cfg = parse_env_cfg(effective_task, device=args.device, num_envs=1)
     env_cfg.seed = 42
     if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
         env_cfg.commands.object_pose.debug_vis = False
@@ -99,7 +111,7 @@ try:
             convention="ros",
         ),
     )
-    env = gym.make(args.task, cfg=env_cfg)
+    env = gym.make(effective_task, cfg=env_cfg)
     env.reset()
     camera = env.unwrapped.scene["web_camera"]
     default_camera_target = torch.tensor(
@@ -113,6 +125,16 @@ try:
         "distance": default_camera[2],
         "position": [1.4, 1.8, 1.2],
     }
+    inference_policy = None
+    policy_observations = None
+    if checkpoint_id and checkpoint_path:
+        agent_cfg = load_cfg_from_registry(effective_task, "rsl_rl_cfg_entry_point")
+        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        runner.load(str(checkpoint_path))
+        inference_policy = runner.get_inference_policy(device=env.unwrapped.device)
+        policy_observations = env.get_observations()
+        print(f"Loaded Isaac web policy checkpoint {checkpoint_id}", flush=True)
     web_assets = []
     # Never reuse a USD prim path during the worker lifetime. Hydra/RTX keeps
     # renderer-side mesh caches, and removing then recreating (for example)
@@ -320,7 +342,9 @@ try:
         status_path,
         {
             "status": "ready",
-            "task": args.task,
+            "task": effective_task,
+            "mode": "trained_policy" if inference_policy else "scripted_preview",
+            "checkpoint": checkpoint_id,
             "startup_seconds": round(time.monotonic() - started_at, 3),
         },
     )
@@ -330,16 +354,20 @@ try:
     with torch.inference_mode():
         while simulation_app.is_running() and not stopping:
             apply_camera_commands()
-            phase = step * 0.018
-            actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-            # A slow, bounded demonstration motion keeps the first web version
-            # visibly alive while a trained checkpoint is wired in next.
-            actions[:, 0] = 0.22 * math.sin(phase)
-            actions[:, 1] = 0.16 * math.sin(phase * 0.73 + 0.8)
-            actions[:, 3] = 0.18 * math.sin(phase * 0.51)
-            actions[:, 5] = 0.12 * math.cos(phase * 0.67)
-            actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-            _, rewards, terminated, truncated, _ = env.step(actions)
+            if inference_policy is not None and policy_observations is not None:
+                actions = inference_policy(policy_observations)
+                policy_observations, rewards, dones, _ = env.step(actions)
+                terminated = dones
+                truncated = torch.zeros_like(dones)
+            else:
+                phase = step * 0.018
+                actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+                actions[:, 0] = 0.22 * math.sin(phase)
+                actions[:, 1] = 0.16 * math.sin(phase * 0.73 + 0.8)
+                actions[:, 3] = 0.18 * math.sin(phase * 0.51)
+                actions[:, 5] = 0.12 * math.cos(phase * 0.67)
+                actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
+                _, rewards, terminated, truncated, _ = env.step(actions)
 
             frame = (
                 env.unwrapped.scene["web_camera"]
@@ -361,12 +389,13 @@ try:
                 metadata_path,
                 {
                     "engine": "isaaclab",
-                    "task": args.task,
+                    "task": effective_task,
                     "episode": episode,
                     "step": step,
                     "reward": float(rewards[0].item()),
                     "simulation_time": simulation_time,
-                    "mode": "scripted_preview",
+                    "mode": "trained_policy" if inference_policy else "scripted_preview",
+                    "checkpoint": checkpoint_id,
                     "camera": {
                         "azimuth": camera_state["azimuth"],
                         "elevation": camera_state["elevation"],
@@ -379,7 +408,8 @@ try:
             )
             step += 1
             if bool(terminated[0].item() or truncated[0].item()):
-                env.reset()
+                if inference_policy is None:
+                    env.reset()
                 step = 0
                 episode += 1
 finally:

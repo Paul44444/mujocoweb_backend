@@ -14,7 +14,7 @@ import time
 from typing import Dict, List, Literal, Optional
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
@@ -22,7 +22,10 @@ ROOT = Path(__file__).resolve().parent
 RUNS_DIRECTORY = ROOT / "web_training_runs"
 WORKER = ROOT / "web_training_worker.py"
 ISAAC_WORKER = ROOT / "isaac_training_worker.py"
+ISAAC_OUTPUT_DIRECTORY = Path(os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocoweb-isaac"))
+ISAAC_POLICY_SELECTION = ISAAC_OUTPUT_DIRECTORY / "selected_policy.json"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+CHECKPOINT_PATTERN = re.compile(r"^model_\d+\.pt$")
 router = APIRouter(prefix="/api/training", tags=["training"])
 manager_lock = threading.Lock()
 
@@ -35,6 +38,11 @@ class StartTrainingRequest(BaseModel):
     horizon: int = Field(default=200, ge=20, le=500)
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64] = 32
+    resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
+
+
+class SelectCheckpointRequest(BaseModel):
+    checkpoint: Optional[str] = Field(default=None, max_length=160)
 
 
 def _read_json(path: Path, fallback):
@@ -50,6 +58,55 @@ def _is_alive(pid: int) -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+
+def _checkpoint_path(checkpoint_id: str) -> Path:
+    run_id, separator, checkpoint_name = checkpoint_id.partition("/")
+    if (
+        not separator
+        or not RUN_ID_PATTERN.fullmatch(run_id)
+        or not CHECKPOINT_PATTERN.fullmatch(checkpoint_name)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid checkpoint ID.")
+    path = RUNS_DIRECTORY / run_id / "checkpoints" / checkpoint_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Checkpoint not found.")
+    return path.resolve()
+
+
+def _checkpoint_payloads() -> List[Dict[str, object]]:
+    checkpoints = []
+    if not RUNS_DIRECTORY.is_dir():
+        return checkpoints
+    for run_directory in sorted(RUNS_DIRECTORY.iterdir(), reverse=True):
+        config = _read_json(run_directory / "config.json", {})
+        if not run_directory.is_dir() or config.get("engine") != "isaaclab":
+            continue
+        for path in sorted(
+            (run_directory / "checkpoints").glob("model_*.pt"),
+            key=lambda item: int(item.stem.split("_")[-1]),
+            reverse=True,
+        ):
+            checkpoints.append({
+                "id": f"{run_directory.name}/{path.name}",
+                "run_id": run_directory.name,
+                "name": path.name,
+                "label": f"{run_directory.name} · {path.name}",
+                "modified_at": path.stat().st_mtime,
+            })
+    return checkpoints[:100]
+
+
+def _restart_isaac_runtime() -> None:
+    time.sleep(0.5)
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "restart", "mujocoweb-isaac.service"],
+            timeout=40,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _run_payload(run_directory: Path) -> Dict[str, object]:
@@ -116,11 +173,37 @@ def get_training_run(run_id: str) -> Dict[str, object]:
     return _run_payload(run_directory)
 
 
+@router.get("/checkpoints")
+def list_checkpoints() -> Dict[str, object]:
+    selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
+    return {"checkpoints": _checkpoint_payloads(), "selected": selected}
+
+
+@router.post("/checkpoints/select")
+def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
+    ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    if request.checkpoint:
+        path = _checkpoint_path(request.checkpoint)
+        payload = {"id": request.checkpoint, "path": str(path), "selected_at": time.time()}
+    else:
+        payload = {"id": None, "path": None, "selected_at": time.time()}
+    temporary = ISAAC_POLICY_SELECTION.with_suffix(".json.next")
+    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(temporary, ISAAC_POLICY_SELECTION)
+    background_tasks.add_task(_restart_isaac_runtime)
+    return {"selected": payload["id"], "status": "restarting"}
+
+
 @router.post("/start")
 def start_training(request: StartTrainingRequest) -> Dict[str, object]:
     with manager_lock:
         if request.engine == "mujoco" and request.iterations > 25:
             raise HTTPException(status_code=422, detail="MuJoCo web training is limited to 25 iterations per run.")
+        resume_path = None
+        if request.resume_checkpoint:
+            if request.engine != "isaaclab":
+                raise HTTPException(status_code=422, detail="Checkpoint resume currently supports Isaac Lab only.")
+            resume_path = _checkpoint_path(request.resume_checkpoint)
         active = _active_run()
         if active:
             raise HTTPException(status_code=409, detail=f"Training run {active['id']} is already active.")
@@ -137,6 +220,7 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
                 "trajectories": request.trajectories,
                 "horizon": request.horizon,
             }),
+            "resume_checkpoint": request.resume_checkpoint,
         }
         (run_directory / "config.json").write_text(json.dumps(initial_config), encoding="utf-8")
         (run_directory / "status.json").write_text(
@@ -154,6 +238,11 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
         ]
         if request.engine == "isaaclab":
             command.extend(["--num-envs", str(request.num_envs)])
+            if resume_path:
+                command.extend([
+                    "--resume-checkpoint", str(resume_path),
+                    "--resume-checkpoint-id", request.resume_checkpoint,
+                ])
         else:
             command.extend(["--trajectories", str(request.trajectories), "--horizon", str(request.horizon)])
         try:

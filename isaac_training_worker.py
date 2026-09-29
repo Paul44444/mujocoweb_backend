@@ -76,6 +76,8 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--num-envs", type=int, choices=(16, 32, 64), required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--resume-checkpoint")
+    parser.add_argument("--resume-checkpoint-id")
     args = parser.parse_args()
 
     run_directory = Path(args.run_directory).resolve()
@@ -92,6 +94,7 @@ def main() -> None:
         "iterations": args.iterations,
         "num_envs": args.num_envs,
         "seed": args.seed,
+        "resume_checkpoint": args.resume_checkpoint_id,
     }
     atomic_json(run_directory / "config.json", config)
     atomic_json(metrics_path, {"metrics": []})
@@ -101,6 +104,7 @@ def main() -> None:
 
     metrics: list[dict] = []
     current: dict = {}
+    first_raw_iteration: int | None = None
     output_directory: Path | None = None
     fatal_error: str | None = None
 
@@ -154,6 +158,19 @@ def main() -> None:
             "--run_name", run_name,
             "--headless",
         ]
+        if args.resume_checkpoint:
+            resume_checkpoint = Path(args.resume_checkpoint).resolve()
+            if not resume_checkpoint.is_file():
+                raise FileNotFoundError(f"Resume checkpoint not found: {resume_checkpoint}")
+            resume_directory = ISAACLAB_ROOT / "logs" / "rsl_rl" / EXPERIMENT / f"resume_{run_name}"
+            resume_directory.mkdir(parents=True, exist_ok=True)
+            staged_checkpoint = resume_directory / resume_checkpoint.name
+            shutil.copy2(resume_checkpoint, staged_checkpoint)
+            command.extend([
+                "--resume",
+                "--load_run", f"^{re.escape(resume_directory.name)}$",
+                "--checkpoint", f"^{re.escape(staged_checkpoint.name)}$",
+            ])
         environment = os.environ.copy()
         environment["PYTHONUNBUFFERED"] = "1"
         # run-local.sh deliberately leaves this empty for the MuJoCo process.
@@ -185,14 +202,17 @@ def main() -> None:
             iteration_match = re.search(r"Learning iteration\s+(\d+)\s*/\s*(\d+)", line)
             if iteration_match:
                 publish_current()
-                current = {"iteration": int(iteration_match.group(1)) + 1}
+                raw_iteration = int(iteration_match.group(1))
+                if first_raw_iteration is None:
+                    first_raw_iteration = raw_iteration
+                current = {"iteration": raw_iteration - first_raw_iteration + 1}
             fps_match = re.search(r"Computation:\s*(\d+)\s+steps/s", line)
             if fps_match:
                 current["fps"] = int(fps_match.group(1))
             for label in ("Mean reward", "Mean value_function loss", "Mean value loss", "value_function"):
                 value = number(line, label)
                 if value is not None:
-                    current["loss" if "loss" in label else "reward_mean"] = value
+                    current["reward_mean" if label == "Mean reward" else "loss"] = value
             success = number(line, "Episode_Reward/lifting")
             if success is not None:
                 current["success_rate"] = success
