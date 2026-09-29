@@ -37,6 +37,7 @@ manager_lock = threading.Lock()
 class StartTrainingRequest(BaseModel):
     engine: Literal["mujoco", "isaaclab"] = "mujoco"
     user: str = Field(default="Guest", min_length=1, max_length=32)
+    name: Optional[str] = Field(default=None, max_length=48)
     iterations: int = Field(default=10, ge=1, le=500)
     trajectories: int = Field(default=3, ge=1, le=8)
     horizon: int = Field(default=200, ge=20, le=500)
@@ -47,6 +48,10 @@ class StartTrainingRequest(BaseModel):
 
 class SelectCheckpointRequest(BaseModel):
     checkpoint: Optional[str] = Field(default=None, max_length=160)
+
+
+class DeleteCheckpointRequest(BaseModel):
+    checkpoint: str = Field(min_length=1, max_length=160)
 
 
 def _read_json(path: Path, fallback):
@@ -95,8 +100,9 @@ def _checkpoint_payloads() -> List[Dict[str, object]]:
                 "id": f"{run_directory.name}/{path.name}",
                 "run_id": run_directory.name,
                 "name": path.name,
-                "label": f"{run_directory.name} · {path.name}",
+                "label": f"{config.get('name') or run_directory.name} · {path.name}",
                 "modified_at": path.stat().st_mtime,
+                "deletable": True,
             })
     return checkpoints[:100]
 
@@ -205,6 +211,19 @@ def checkpoint_status() -> Dict[str, object]:
     return {"selected": selected, "worker": status}
 
 
+@router.delete("/checkpoints")
+def delete_checkpoint(request: DeleteCheckpointRequest) -> Dict[str, object]:
+    selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
+    if request.checkpoint == selected:
+        raise HTTPException(
+            status_code=409,
+            detail="The active checkpoint cannot be deleted. Load another policy first.",
+        )
+    path = _checkpoint_path(request.checkpoint)
+    path.unlink()
+    return {"deleted": request.checkpoint}
+
+
 @router.post("/checkpoints/select")
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
@@ -262,11 +281,16 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
             raise HTTPException(status_code=409, detail=f"Training run {active['id']} is already active.")
         RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
         user = re.sub(r"[^A-Za-z0-9_-]", "-", request.user).strip("-")[:32] or "Guest"
-        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{user}-{uuid.uuid4().hex[:6]}"
+        default_name = "Isaac training" if request.engine == "isaaclab" else "MuJoCo training"
+        display_name = (request.name or "").strip()[:48] or f"{default_name} {time.strftime('%Y-%m-%d %H:%M')}"
+        name_slug = re.sub(r"[^A-Za-z0-9_-]", "-", display_name).strip("-")[:28] or "training"
+        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{name_slug}-{uuid.uuid4().hex[:6]}"
         run_directory = RUNS_DIRECTORY / run_id
         run_directory.mkdir(mode=0o750)
         initial_config = {
             "engine": request.engine,
+            "name": display_name,
+            "user": user,
             "iterations": request.iterations,
             "seed": request.seed,
             **({"num_envs": request.num_envs} if request.engine == "isaaclab" else {
