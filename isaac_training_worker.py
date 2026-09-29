@@ -74,7 +74,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-directory", required=True)
     parser.add_argument("--iterations", type=int, required=True)
-    parser.add_argument("--num-envs", type=int, choices=(16, 32, 64), required=True)
+    parser.add_argument("--num-envs", type=int, choices=(16, 32, 64, 128, 256, 512), required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--resume-checkpoint")
     parser.add_argument("--resume-checkpoint-id")

@@ -42,7 +42,7 @@ class StartTrainingRequest(BaseModel):
     trajectories: int = Field(default=3, ge=1, le=8)
     horizon: int = Field(default=200, ge=20, le=500)
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
-    num_envs: Literal[16, 32, 64] = 32
+    num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
 
 
