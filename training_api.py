@@ -24,6 +24,9 @@ WORKER = ROOT / "web_training_worker.py"
 ISAAC_WORKER = ROOT / "isaac_training_worker.py"
 ISAAC_OUTPUT_DIRECTORY = Path(os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocoweb-isaac"))
 ISAAC_POLICY_SELECTION = ISAAC_OUTPUT_DIRECTORY / "selected_policy.json"
+ISAAC_STATUS_PATH = ISAAC_OUTPUT_DIRECTORY / "status.json"
+ISAAC_FRAME_PATH = ISAAC_OUTPUT_DIRECTORY / "frame.jpg"
+ISAAC_METADATA_PATH = ISAAC_OUTPUT_DIRECTORY / "metadata.json"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 CHECKPOINT_PATTERN = re.compile(r"^model_\d+\.pt$")
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -98,10 +101,16 @@ def _checkpoint_payloads() -> List[Dict[str, object]]:
 
 
 def _restart_isaac_runtime() -> None:
-    time.sleep(0.5)
     try:
         subprocess.run(
-            ["systemctl", "--user", "restart", "mujocoweb-isaac.service"],
+            ["systemctl", "--user", "stop", "mujocoweb-isaac.service"],
+            timeout=40,
+            check=False,
+        )
+        ISAAC_FRAME_PATH.unlink(missing_ok=True)
+        ISAAC_METADATA_PATH.unlink(missing_ok=True)
+        subprocess.run(
+            ["systemctl", "--user", "start", "mujocoweb-isaac.service"],
             timeout=40,
             check=False,
         )
@@ -179,6 +188,13 @@ def list_checkpoints() -> Dict[str, object]:
     return {"checkpoints": _checkpoint_payloads(), "selected": selected}
 
 
+@router.get("/checkpoints/status")
+def checkpoint_status() -> Dict[str, object]:
+    selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
+    status = _read_json(ISAAC_STATUS_PATH, {"status": "unknown"})
+    return {"selected": selected, "worker": status}
+
+
 @router.post("/checkpoints/select")
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
@@ -190,6 +206,13 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
     temporary = ISAAC_POLICY_SELECTION.with_suffix(".json.next")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, ISAAC_POLICY_SELECTION)
+    status_temporary = ISAAC_STATUS_PATH.with_suffix(".json.next")
+    status_temporary.write_text(json.dumps({
+        "status": "restarting",
+        "checkpoint": payload["id"],
+        "requested_at": time.time(),
+    }), encoding="utf-8")
+    os.replace(status_temporary, ISAAC_STATUS_PATH)
     background_tasks.add_task(_restart_isaac_runtime)
     return {"selected": payload["id"], "status": "restarting"}
 
