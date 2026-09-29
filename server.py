@@ -184,7 +184,6 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
     last_frame_mtime = 0
     waiting_since = time.monotonic()
     loop = asyncio.get_running_loop()
-    paused = asyncio.Event()
     disconnected = asyncio.Event()
 
     def publish_command(command: dict[str, Any]) -> None:
@@ -210,10 +209,12 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                 disconnected.set()
                 return
             if command.get("type") == "set_paused":
-                if command.get("paused") is True:
-                    paused.set()
-                elif command.get("paused") is False:
-                    paused.clear()
+                if type(command.get("paused")) is bool:
+                    await loop.run_in_executor(
+                        None,
+                        publish_command,
+                        {"type": "set_paused", "paused": command["paused"]},
+                    )
                 continue
 
             command_type = command.get("type")
@@ -270,9 +271,6 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
 
     try:
         while not disconnected.is_set():
-            if paused.is_set():
-                await asyncio.sleep(0.05)
-                continue
             try:
                 frame_stat = await loop.run_in_executor(None, os.stat, ISAAC_FRAME_PATH)
             except FileNotFoundError:

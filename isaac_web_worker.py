@@ -64,6 +64,7 @@ except (OSError, ValueError, TypeError):
 checkpoint_path = Path(policy_selection.get("path", "")) if policy_selection.get("path") else None
 checkpoint_id = policy_selection.get("id") if checkpoint_path and checkpoint_path.is_file() else None
 stopping = False
+simulation_paused = False
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -284,7 +285,7 @@ try:
         print(f"Replaced Isaac web scene with {len(web_assets)} assets", flush=True)
 
     def apply_camera_commands() -> None:
-        global runner, inference_policy, policy_observations, checkpoint_id, checkpoint_path
+        global runner, inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -327,6 +328,12 @@ try:
                     spawn_web_asset(command)
                 elif command_type == "scene_replace":
                     replace_web_scene(command.get("assets", []))
+                elif command_type == "set_paused":
+                    simulation_paused = bool(command["paused"])
+                    print(
+                        "Isaac web simulation paused" if simulation_paused else "Isaac web simulation resumed",
+                        flush=True,
+                    )
                 elif command_type == "policy_load":
                     if runner is None:
                         raise RuntimeError("Live policy switching requires an already loaded trained policy")
@@ -379,23 +386,27 @@ try:
 
     step = 0
     episode = 0
+    rewards = torch.zeros(1, dtype=torch.float32, device=env.unwrapped.device)
+    terminated = torch.zeros(1, dtype=torch.bool, device=env.unwrapped.device)
+    truncated = torch.zeros(1, dtype=torch.bool, device=env.unwrapped.device)
     with torch.inference_mode():
         while simulation_app.is_running() and not stopping:
             apply_camera_commands()
-            if inference_policy is not None and policy_observations is not None:
-                actions = inference_policy(policy_observations)
-                policy_observations, rewards, dones, _ = env.step(actions)
-                terminated = dones
-                truncated = torch.zeros_like(dones)
-            else:
-                phase = step * 0.018
-                actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-                actions[:, 0] = 0.22 * math.sin(phase)
-                actions[:, 1] = 0.16 * math.sin(phase * 0.73 + 0.8)
-                actions[:, 3] = 0.18 * math.sin(phase * 0.51)
-                actions[:, 5] = 0.12 * math.cos(phase * 0.67)
-                actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                _, rewards, terminated, truncated, _ = env.step(actions)
+            if not simulation_paused:
+                if inference_policy is not None and policy_observations is not None:
+                    actions = inference_policy(policy_observations)
+                    policy_observations, rewards, dones, _ = env.step(actions)
+                    terminated = dones
+                    truncated = torch.zeros_like(dones)
+                else:
+                    phase = step * 0.018
+                    actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+                    actions[:, 0] = 0.22 * math.sin(phase)
+                    actions[:, 1] = 0.16 * math.sin(phase * 0.73 + 0.8)
+                    actions[:, 3] = 0.18 * math.sin(phase * 0.51)
+                    actions[:, 5] = 0.12 * math.cos(phase * 0.67)
+                    actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
+                    _, rewards, terminated, truncated, _ = env.step(actions)
 
             frame = (
                 env.unwrapped.scene["web_camera"]
@@ -422,6 +433,7 @@ try:
                     "step": step,
                     "reward": float(rewards[0].item()),
                     "simulation_time": simulation_time,
+                    "paused": simulation_paused,
                     "mode": "trained_policy" if inference_policy else "scripted_preview",
                     "checkpoint": checkpoint_id,
                     "camera": {
@@ -434,6 +446,9 @@ try:
                     "web_assets": web_assets,
                 },
             )
+            if simulation_paused:
+                time.sleep(0.03)
+                continue
             step += 1
             if bool(terminated[0].item() or truncated[0].item()):
                 if inference_policy is None:
