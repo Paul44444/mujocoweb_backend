@@ -61,6 +61,12 @@ def _read_json(path: Path, fallback):
         return fallback
 
 
+def _write_json(path: Path, value: Dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".next")
+    temporary.write_text(json.dumps(value), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _is_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -159,7 +165,7 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
     metrics = _read_json(run_directory / "metrics.json", {"metrics": []}).get("metrics", [])
     pid_data = _read_json(run_directory / "process.json", {})
     pid = int(pid_data.get("pid", 0) or 0)
-    if status.get("status") in {"starting", "training"} and pid and not _is_alive(pid):
+    if status.get("status") in {"starting", "training", "paused"} and pid and not _is_alive(pid):
         status = {**status, "status": "failed", "error": "Training process exited unexpectedly."}
     if (
         config.get("engine") == "isaaclab"
@@ -191,7 +197,7 @@ def _active_run() -> Dict[str, object] | None:
         if not run_directory.is_dir():
             continue
         payload = _run_payload(run_directory)
-        if payload["status"].get("status") in {"starting", "training"}:
+        if payload["status"].get("status") in {"starting", "training", "paused"}:
             return payload
     return None
 
@@ -360,18 +366,58 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
 
 @router.post("/runs/{run_id}/stop")
 def stop_training(run_id: str) -> Dict[str, object]:
+    """Freeze the complete trainer process tree so it can resume exactly in place."""
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise HTTPException(status_code=400, detail="Invalid training run ID.")
     run_directory = RUNS_DIRECTORY / run_id
     if not run_directory.is_dir():
         raise HTTPException(status_code=404, detail="Training run not found.")
-    payload = _run_payload(run_directory)
-    if payload["status"].get("status") not in {"starting", "training"}:
-        return payload
-    pid = int(_read_json(run_directory / "process.json", {}).get("pid", 0) or 0)
-    if pid and _is_alive(pid):
+    with manager_lock:
+        payload = _run_payload(run_directory)
+        if payload["status"].get("status") == "paused":
+            return payload
+        if payload["status"].get("status") not in {"starting", "training"}:
+            return payload
+        pid = int(_read_json(run_directory / "process.json", {}).get("pid", 0) or 0)
+        if not pid or not _is_alive(pid):
+            raise HTTPException(status_code=409, detail="The training process is no longer running.")
         try:
-            os.killpg(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    return _run_payload(run_directory)
+            os.killpg(pid, signal.SIGSTOP)
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail="Could not pause the training process.") from exc
+        current = _read_json(run_directory / "status.json", {})
+        _write_json(run_directory / "status.json", {
+            **current,
+            "status": "paused",
+            "paused_at": time.time(),
+        })
+        return _run_payload(run_directory)
+
+
+@router.post("/runs/{run_id}/continue")
+def continue_training(run_id: str) -> Dict[str, object]:
+    """Resume a SIGSTOP-paused trainer without replacing its state or metrics."""
+    if not RUN_ID_PATTERN.fullmatch(run_id):
+        raise HTTPException(status_code=400, detail="Invalid training run ID.")
+    run_directory = RUNS_DIRECTORY / run_id
+    if not run_directory.is_dir():
+        raise HTTPException(status_code=404, detail="Training run not found.")
+    with manager_lock:
+        payload = _run_payload(run_directory)
+        if payload["status"].get("status") != "paused":
+            return payload
+        pid = int(_read_json(run_directory / "process.json", {}).get("pid", 0) or 0)
+        if not pid or not _is_alive(pid):
+            raise HTTPException(status_code=409, detail="The paused training process is no longer available. Resume from its latest checkpoint instead.")
+        current = _read_json(run_directory / "status.json", {})
+        _write_json(run_directory / "status.json", {
+            **current,
+            "status": "training",
+            "continued_at": time.time(),
+        })
+        try:
+            os.killpg(pid, signal.SIGCONT)
+        except OSError as exc:
+            _write_json(run_directory / "status.json", current)
+            raise HTTPException(status_code=409, detail="Could not continue the training process.") from exc
+        return _run_payload(run_directory)
