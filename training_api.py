@@ -38,7 +38,7 @@ class StartTrainingRequest(BaseModel):
     engine: Literal["mujoco", "isaaclab"] = "mujoco"
     user: str = Field(default="Guest", min_length=1, max_length=32)
     name: Optional[str] = Field(default=None, max_length=48)
-    iterations: int = Field(default=10, ge=1, le=500)
+    iterations: int = Field(default=10, ge=1)
     trajectories: int = Field(default=3, ge=1, le=8)
     horizon: int = Field(default=200, ge=20, le=500)
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
