@@ -41,12 +41,9 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab_assets.robots import KUKA_ALLEGRO_CFG
 from isaaclab.sensors import CameraCfg
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
-from rsl_rl.runners import OnPolicyRunner
 import isaaclab_tasks  # noqa: F401
-import isaac_vision_task  # noqa: F401
+import isaac_vision_task
 from isaaclab_tasks.utils import parse_env_cfg
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 
 output_directory = Path(args.output_directory)
@@ -92,6 +89,27 @@ def stop_worker(_signum: int, _frame: object) -> None:
     stopping = True
 
 
+def load_actor(checkpoint: Path) -> torch.nn.Module:
+    """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    model_state = payload["model_state_dict"]
+    actor_state = {key.removeprefix("actor."): value.cpu() for key, value in model_state.items() if key.startswith("actor.")}
+    linear_keys = sorted(
+        (key for key in actor_state if key.endswith(".weight")),
+        key=lambda key: int(key.split(".", 1)[0]),
+    )
+    layers = []
+    for layer_index, key in enumerate(linear_keys):
+        output_size, input_size = actor_state[key].shape
+        layers.append(torch.nn.Linear(input_size, output_size))
+        if layer_index < len(linear_keys) - 1:
+            layers.append(torch.nn.ELU())
+    actor = torch.nn.Sequential(*layers)
+    actor.load_state_dict(actor_state)
+    actor.eval()
+    return actor
+
+
 signal.signal(signal.SIGTERM, stop_worker)
 signal.signal(signal.SIGINT, stop_worker)
 atomic_json(status_path, {"status": "starting", "task": task_mode})
@@ -126,14 +144,24 @@ try:
         ),
     )
     env = gym.make(effective_task, cfg=env_cfg)
-    env.reset()
+    reset_observations, _ = env.reset()
     camera = env.unwrapped.scene["web_camera"]
     if task_mode == "vision":
         vision_camera = env.unwrapped.scene["vision_camera"]
+        vision_camera_side = env.unwrapped.scene["vision_camera_side"]
+        perception_target = torch.tensor([[0.48, 0.0, 0.16]], dtype=torch.float32, device=env.unwrapped.device)
         vision_camera.set_world_poses_from_view(
             torch.tensor([[1.25, 0.90, 0.90]], dtype=torch.float32, device=env.unwrapped.device),
-            torch.tensor([[0.48, 0.0, 0.16]], dtype=torch.float32, device=env.unwrapped.device),
+            perception_target,
         )
+        vision_camera_side.set_world_poses_from_view(
+            torch.tensor([[1.0, -0.90, 0.85]], dtype=torch.float32, device=env.unwrapped.device),
+            perception_target,
+        )
+        # Camera images follow new Xforms immediately, while CameraData keeps
+        # initialization poses unless explicitly reset/synchronized.
+        vision_camera.reset()
+        vision_camera_side.reset()
     default_camera_target = torch.tensor(
         [[0.45, 0.0, 0.45]], dtype=torch.float32, device=env.unwrapped.device
     )
@@ -145,16 +173,31 @@ try:
         "distance": default_camera[2],
         "position": [1.4, 1.8, 1.2],
     }
-    runner = None
     inference_policy = None
-    policy_observations = None
+    policy_observations = reset_observations.get("policy") if isinstance(reset_observations, dict) else reset_observations
+
+    def apply_vision_estimate(observations):
+        if task_mode != "vision" or observations is None:
+            return observations
+        observations[:, 18:21] = isaac_vision_task.camera_object_position(env.unwrapped)
+        return observations
+
+    if task_mode == "vision":
+        # Render the newly positioned perception camera before the first policy
+        # action.  Otherwise Isaac exposes one stale frame from its configured
+        # spawn pose and the actor can react to a wildly incorrect coordinate.
+        warmup_actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+        for _ in range(3):
+            warmup_observations, _, _, _, _ = env.step(warmup_actions)
+        policy_observations = (
+            warmup_observations.get("policy")
+            if isinstance(warmup_observations, dict)
+            else warmup_observations
+        )
+        policy_observations = apply_vision_estimate(policy_observations)
+
     if checkpoint_id and checkpoint_path:
-        agent_cfg = load_cfg_from_registry(effective_task, "rsl_rl_cfg_entry_point")
-        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-        runner.load(str(checkpoint_path))
-        inference_policy = runner.get_inference_policy(device=env.unwrapped.device)
-        policy_observations = env.get_observations()
+        inference_policy = load_actor(checkpoint_path)
         print(f"Loaded Isaac web policy checkpoint {checkpoint_id}", flush=True)
     web_assets = []
     # Never reuse a USD prim path during the worker lifetime. Hydra/RTX keeps
@@ -304,7 +347,7 @@ try:
         print(f"Replaced Isaac web scene with {len(web_assets)} assets", flush=True)
 
     def apply_camera_commands() -> None:
-        global runner, inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
+        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -354,14 +397,10 @@ try:
                         flush=True,
                     )
                 elif command_type == "policy_load":
-                    if runner is None:
-                        raise RuntimeError("Live policy switching requires an already loaded trained policy")
                     requested_path = Path(str(command["path"])).resolve()
                     if not requested_path.is_file():
                         raise FileNotFoundError(f"Policy checkpoint not found: {requested_path}")
-                    runner.load(str(requested_path))
-                    inference_policy = runner.get_inference_policy(device=env.unwrapped.device)
-                    policy_observations = env.get_observations()
+                    inference_policy = load_actor(requested_path)
                     checkpoint_path = requested_path
                     checkpoint_id = str(command["id"])
                     atomic_json(status_path, {
@@ -413,10 +452,10 @@ try:
             apply_camera_commands()
             if not simulation_paused:
                 if inference_policy is not None and policy_observations is not None:
-                    actions = inference_policy(policy_observations)
-                    policy_observations, rewards, dones, _ = env.step(actions)
-                    terminated = dones
-                    truncated = torch.zeros_like(dones)
+                    actions = inference_policy(policy_observations.cpu()).to(env.unwrapped.device)
+                    step_observations, rewards, terminated, truncated, _ = env.step(actions)
+                    policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
+                    policy_observations = apply_vision_estimate(policy_observations)
                 else:
                     phase = step * 0.018
                     actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
@@ -425,7 +464,9 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                    _, rewards, terminated, truncated, _ = env.step(actions)
+                    step_observations, rewards, terminated, truncated, _ = env.step(actions)
+                    policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
+                    policy_observations = apply_vision_estimate(policy_observations)
 
             frame = (
                 env.unwrapped.scene["web_camera"]
@@ -470,6 +511,7 @@ try:
                     "paused": simulation_paused,
                     "mode": "trained_policy" if inference_policy else "scripted_preview",
                     "checkpoint": checkpoint_id,
+                    "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "camera": {
                         "azimuth": camera_state["azimuth"],
                         "elevation": camera_state["elevation"],

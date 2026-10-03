@@ -112,7 +112,9 @@ def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, obj
         if not run_directory.is_dir() or config.get("engine") != "isaaclab":
             continue
         run_task = str(config.get("isaac_task") or "state")
-        if isaac_task and run_task != isaac_task:
+        if isaac_task == "state" and run_task != "state":
+            continue
+        if isaac_task == "vision" and run_task not in {"state", "vision"}:
             continue
         for path in sorted(
             (run_directory / "checkpoints").glob("model_*.pt"),
@@ -292,8 +294,9 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
         path = _checkpoint_path(request.checkpoint)
         run_config = _read_json(path.parent.parent / "config.json", {})
         checkpoint_task = run_config.get("isaac_task", "state")
-        if checkpoint_task != current_task:
-            raise HTTPException(status_code=409, detail="This checkpoint belongs to a different Isaac task.")
+        compatible = checkpoint_task == current_task or (current_task == "vision" and checkpoint_task == "state")
+        if not compatible:
+            raise HTTPException(status_code=409, detail="This checkpoint is not observation-compatible with the active Isaac task.")
         payload = {"id": request.checkpoint, "path": str(path), "isaac_task": checkpoint_task, "selected_at": time.time()}
     else:
         payload = {"id": None, "path": None, "isaac_task": current_task, "selected_at": time.time()}
@@ -342,8 +345,10 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
                 raise HTTPException(status_code=422, detail="Checkpoint resume currently supports Isaac Lab only.")
             resume_path = _checkpoint_path(request.resume_checkpoint)
             resume_config = _read_json(resume_path.parent.parent / "config.json", {})
-            if resume_config.get("isaac_task", "state") != request.isaac_task:
-                raise HTTPException(status_code=422, detail="The resume checkpoint belongs to a different Isaac task.")
+            resume_task = resume_config.get("isaac_task", "state")
+            compatible = resume_task == request.isaac_task or (request.isaac_task == "vision" and resume_task == "state")
+            if not compatible:
+                raise HTTPException(status_code=422, detail="The resume checkpoint is not observation-compatible with this Isaac task.")
         active = _active_run()
         if active:
             raise HTTPException(status_code=409, detail=f"Training run {active['id']} is already active.")
