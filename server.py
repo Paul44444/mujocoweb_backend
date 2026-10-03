@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from assistant_api import router as assistant_router
@@ -111,6 +111,7 @@ DEFAULT_FRONTEND_ORIGINS = (
 )
 ISAAC_OUTPUT_DIRECTORY = os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocoweb-isaac")
 ISAAC_FRAME_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "frame.jpg")
+ISAAC_VISION_FRAME_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "vision_frame.jpg")
 ISAAC_METADATA_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "metadata.json")
 ISAAC_STATUS_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "status.json")
 ISAAC_CONTROL_DIRECTORY = os.path.join(ISAAC_OUTPUT_DIRECTORY, "commands")
@@ -171,6 +172,21 @@ def root() -> Dict[str, str]:
     return {"status": "MuJoCo and Isaac Lab backend gateway is running"}
 
 
+@app.get("/api/isaac/vision-frame")
+def isaac_vision_frame() -> FileResponse:
+    path = Path(ISAAC_VISION_FRAME_PATH)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Vision camera frame is not ready yet.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+def _read_isaac_status_task() -> str:
+    try:
+        return str(json.loads(Path(ISAAC_STATUS_PATH).read_text(encoding="utf-8")).get("task", "state"))
+    except (OSError, ValueError, TypeError):
+        return "state"
+
+
 async def stream_isaac_simulation(websocket: WebSocket) -> None:
     """Relay frames from the persistent Isaac Lab process to one browser."""
     await websocket.send_json(
@@ -178,7 +194,7 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
             "type": "status",
             "status": "simulation_started",
             "engine": "isaaclab",
-            "task": "Isaac-Lift-Cube-Franka-v0",
+            "task": _read_isaac_status_task(),
         }
     )
     last_frame_mtime = 0

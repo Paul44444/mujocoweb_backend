@@ -25,10 +25,11 @@ ISAACLAB_PYTHON = Path(
     os.environ.get("ISAACLAB_PYTHON", "/home/paul/miniconda3/envs/env_isaaclab1/bin/python")
 )
 TRAIN_SCRIPT = ISAACLAB_ROOT / "scripts" / "reinforcement_learning" / "rsl_rl" / "train.py"
-TASK = "Isaac-Lift-Cube-Franka-v0"
+VISION_TRAIN_SCRIPT = ROOT / "isaac_vision_train.py"
+TASKS = {"state": "Isaac-Lift-Cube-Franka-v0", "vision": "Isaac-Lift-Cube-Franka-Vision-v0"}
+EXPERIMENTS = {"state": "franka_lift", "vision": "franka_lift_vision"}
 # This installed Isaac Lab release parses ``--experiment_name`` but keeps the
 # task's registered experiment name. Keep discovery aligned with that output.
-EXPERIMENT = "franka_lift"
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 stopping = False
 child: subprocess.Popen[str] | None = None
@@ -47,8 +48,8 @@ def stop_worker(_signum: int, _frame: object) -> None:
         child.terminate()
 
 
-def find_output_directory(run_name: str) -> Path | None:
-    root = ISAACLAB_ROOT / "logs" / "rsl_rl" / EXPERIMENT
+def find_output_directory(run_name: str, experiment: str) -> Path | None:
+    root = ISAACLAB_ROOT / "logs" / "rsl_rl" / experiment
     matches = sorted(root.glob(f"*_{run_name}"), key=lambda path: path.stat().st_mtime, reverse=True)
     return matches[0] if matches else None
 
@@ -76,9 +77,13 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--num-envs", type=int, choices=(16, 32, 64, 128, 256, 512), required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--isaac-task", choices=("state", "vision"), default="state")
     parser.add_argument("--resume-checkpoint")
     parser.add_argument("--resume-checkpoint-id")
     args = parser.parse_args()
+    task = TASKS[args.isaac_task]
+    experiment = EXPERIMENTS[args.isaac_task]
+    train_script = VISION_TRAIN_SCRIPT if args.isaac_task == "vision" else TRAIN_SCRIPT
 
     run_directory = Path(args.run_directory).resolve()
     run_directory.mkdir(parents=True, exist_ok=True)
@@ -94,7 +99,8 @@ def main() -> None:
     config = {
         **existing_config,
         "engine": "isaaclab",
-        "environment": TASK,
+        "environment": task,
+        "isaac_task": args.isaac_task,
         "algorithm": "RSL-RL PPO",
         "iterations": args.iterations,
         "num_envs": args.num_envs,
@@ -139,7 +145,7 @@ def main() -> None:
         else:
             metrics.append(metric)
         atomic_json(metrics_path, {"metrics": metrics})
-        output_directory = output_directory or find_output_directory(run_name)
+        output_directory = output_directory or find_output_directory(run_name, experiment)
         checkpoint_names = sync_checkpoints(output_directory, checkpoints_directory)
         atomic_json(status_path, {
             "status": "training",
@@ -151,15 +157,15 @@ def main() -> None:
     try:
         if not ISAACLAB_PYTHON.is_file():
             raise FileNotFoundError(f"Isaac Lab Python not found: {ISAACLAB_PYTHON}")
-        if not TRAIN_SCRIPT.is_file():
-            raise FileNotFoundError(f"Isaac Lab training script not found: {TRAIN_SCRIPT}")
+        if not train_script.is_file():
+            raise FileNotFoundError(f"Isaac Lab training script not found: {train_script}")
         command = [
-            str(ISAACLAB_PYTHON), "-u", str(TRAIN_SCRIPT),
-            "--task", TASK,
+            str(ISAACLAB_PYTHON), "-u", str(train_script),
+            "--task", task,
             "--num_envs", str(args.num_envs),
             "--max_iterations", str(args.iterations),
             "--seed", str(args.seed),
-            "--experiment_name", EXPERIMENT,
+            "--experiment_name", experiment,
             "--run_name", run_name,
             "--headless",
         ]
@@ -167,7 +173,7 @@ def main() -> None:
             resume_checkpoint = Path(args.resume_checkpoint).resolve()
             if not resume_checkpoint.is_file():
                 raise FileNotFoundError(f"Resume checkpoint not found: {resume_checkpoint}")
-            resume_directory = ISAACLAB_ROOT / "logs" / "rsl_rl" / EXPERIMENT / f"resume_{run_name}"
+            resume_directory = ISAACLAB_ROOT / "logs" / "rsl_rl" / experiment / f"resume_{run_name}"
             resume_directory.mkdir(parents=True, exist_ok=True)
             staged_checkpoint = resume_directory / resume_checkpoint.name
             shutil.copy2(resume_checkpoint, staged_checkpoint)
@@ -177,6 +183,7 @@ def main() -> None:
                 "--checkpoint", f"^{re.escape(staged_checkpoint.name)}$",
             ])
         environment = os.environ.copy()
+        environment["PYTHONPATH"] = f"{ROOT}:{environment.get('PYTHONPATH', '')}"
         environment["PYTHONUNBUFFERED"] = "1"
         # run-local.sh deliberately leaves this empty for the MuJoCo process.
         # An empty CUDA_VISIBLE_DEVICES hides every GPU from the child process.
@@ -233,7 +240,7 @@ def main() -> None:
                 break
         return_code = child.wait()
         publish_current()
-        output_directory = output_directory or find_output_directory(run_name)
+        output_directory = output_directory or find_output_directory(run_name, experiment)
         checkpoint_names = sync_checkpoints(output_directory, checkpoints_directory)
         if stopping:
             final_status = "stopped"

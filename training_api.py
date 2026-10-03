@@ -24,6 +24,7 @@ WORKER = ROOT / "web_training_worker.py"
 ISAAC_WORKER = ROOT / "isaac_training_worker.py"
 ISAAC_OUTPUT_DIRECTORY = Path(os.environ.get("ISAAC_OUTPUT_DIRECTORY", "/tmp/mujocoweb-isaac"))
 ISAAC_POLICY_SELECTION = ISAAC_OUTPUT_DIRECTORY / "selected_policy.json"
+ISAAC_TASK_SELECTION = ISAAC_OUTPUT_DIRECTORY / "selected_task.json"
 ISAAC_STATUS_PATH = ISAAC_OUTPUT_DIRECTORY / "status.json"
 ISAAC_FRAME_PATH = ISAAC_OUTPUT_DIRECTORY / "frame.jpg"
 ISAAC_METADATA_PATH = ISAAC_OUTPUT_DIRECTORY / "metadata.json"
@@ -44,6 +45,11 @@ class StartTrainingRequest(BaseModel):
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
+    isaac_task: Literal["state", "vision"] = "state"
+
+
+class SelectIsaacTaskRequest(BaseModel):
+    task: Literal["state", "vision"]
 
 
 class SelectCheckpointRequest(BaseModel):
@@ -97,13 +103,16 @@ def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
     return legacy_match.group(1) if legacy_match else run_directory.name
 
 
-def _checkpoint_payloads() -> List[Dict[str, object]]:
+def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, object]]:
     checkpoints = []
     if not RUNS_DIRECTORY.is_dir():
         return checkpoints
     for run_directory in sorted(RUNS_DIRECTORY.iterdir(), reverse=True):
         config = _read_json(run_directory / "config.json", {})
         if not run_directory.is_dir() or config.get("engine") != "isaaclab":
+            continue
+        run_task = str(config.get("isaac_task") or "state")
+        if isaac_task and run_task != isaac_task:
             continue
         for path in sorted(
             (run_directory / "checkpoints").glob("model_*.pt"),
@@ -117,6 +126,7 @@ def _checkpoint_payloads() -> List[Dict[str, object]]:
                 "label": f"{_run_display_name(run_directory, config)} · {path.name}",
                 "modified_at": path.stat().st_mtime,
                 "deletable": True,
+                "isaac_task": run_task,
             })
     return checkpoints[:100]
 
@@ -205,11 +215,14 @@ def _active_run() -> Dict[str, object] | None:
 @router.get("/runs")
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision"]] = Query(default=None),
 ) -> Dict[str, List[Dict[str, object]]]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
     if engine:
         runs = [run for run in runs if run.get("config", {}).get("engine", "mujoco") == engine]
+    if isaac_task:
+        runs = [run for run in runs if run.get("config", {}).get("isaac_task", "state") == isaac_task]
     return {"runs": runs[:20]}
 
 
@@ -224,9 +237,31 @@ def get_training_run(run_id: str) -> Dict[str, object]:
 
 
 @router.get("/checkpoints")
-def list_checkpoints() -> Dict[str, object]:
+def list_checkpoints(
+    isaac_task: Optional[Literal["state", "vision"]] = Query(default=None),
+) -> Dict[str, object]:
     selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
-    return {"checkpoints": _checkpoint_payloads(), "selected": selected}
+    return {"checkpoints": _checkpoint_payloads(isaac_task), "selected": selected}
+
+
+@router.get("/isaac-task")
+def get_isaac_task() -> Dict[str, object]:
+    task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
+    status = _read_json(ISAAC_STATUS_PATH, {"status": "unknown"})
+    return {"task": task, "worker": status}
+
+
+@router.post("/isaac-task")
+def select_isaac_task(request: SelectIsaacTaskRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
+    ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    current = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
+    if current == request.task and _read_json(ISAAC_STATUS_PATH, {}).get("status") == "ready":
+        return {"task": request.task, "status": "ready", "restarting": False}
+    _write_json(ISAAC_TASK_SELECTION, {"task": request.task, "selected_at": time.time()})
+    _write_json(ISAAC_POLICY_SELECTION, {"id": None, "path": None, "isaac_task": request.task})
+    _write_json(ISAAC_STATUS_PATH, {"status": "restarting", "task": request.task})
+    background_tasks.add_task(_restart_isaac_runtime)
+    return {"task": request.task, "status": "restarting", "restarting": True, "estimated_seconds": 45}
 
 
 @router.get("/checkpoints/status")
@@ -252,11 +287,16 @@ def delete_checkpoint(request: DeleteCheckpointRequest) -> Dict[str, object]:
 @router.post("/checkpoints/select")
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    current_task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
     if request.checkpoint:
         path = _checkpoint_path(request.checkpoint)
-        payload = {"id": request.checkpoint, "path": str(path), "selected_at": time.time()}
+        run_config = _read_json(path.parent.parent / "config.json", {})
+        checkpoint_task = run_config.get("isaac_task", "state")
+        if checkpoint_task != current_task:
+            raise HTTPException(status_code=409, detail="This checkpoint belongs to a different Isaac task.")
+        payload = {"id": request.checkpoint, "path": str(path), "isaac_task": checkpoint_task, "selected_at": time.time()}
     else:
-        payload = {"id": None, "path": None, "selected_at": time.time()}
+        payload = {"id": None, "path": None, "isaac_task": current_task, "selected_at": time.time()}
     temporary = ISAAC_POLICY_SELECTION.with_suffix(".json.next")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, ISAAC_POLICY_SELECTION)
@@ -301,6 +341,9 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
             if request.engine != "isaaclab":
                 raise HTTPException(status_code=422, detail="Checkpoint resume currently supports Isaac Lab only.")
             resume_path = _checkpoint_path(request.resume_checkpoint)
+            resume_config = _read_json(resume_path.parent.parent / "config.json", {})
+            if resume_config.get("isaac_task", "state") != request.isaac_task:
+                raise HTTPException(status_code=422, detail="The resume checkpoint belongs to a different Isaac task.")
         active = _active_run()
         if active:
             raise HTTPException(status_code=409, detail=f"Training run {active['id']} is already active.")
@@ -323,6 +366,7 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
                 "horizon": request.horizon,
             }),
             "resume_checkpoint": request.resume_checkpoint,
+            "isaac_task": request.isaac_task if request.engine == "isaaclab" else None,
         }
         (run_directory / "config.json").write_text(json.dumps(initial_config), encoding="utf-8")
         (run_directory / "status.json").write_text(
@@ -339,7 +383,7 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
             "--seed", str(request.seed),
         ]
         if request.engine == "isaaclab":
-            command.extend(["--num-envs", str(request.num_envs)])
+            command.extend(["--num-envs", str(request.num_envs), "--isaac-task", request.isaac_task])
             if resume_path:
                 command.extend([
                     "--resume-checkpoint", str(resume_path),

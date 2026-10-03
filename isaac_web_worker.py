@@ -44,6 +44,7 @@ from isaaclab.sensors import CameraCfg
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 import isaaclab_tasks  # noqa: F401
+import isaac_vision_task  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
@@ -51,11 +52,20 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 output_directory = Path(args.output_directory)
 output_directory.mkdir(parents=True, exist_ok=True)
 frame_path = output_directory / "frame.jpg"
+vision_frame_path = output_directory / "vision_frame.jpg"
 metadata_path = output_directory / "metadata.json"
 status_path = output_directory / "status.json"
 control_directory = output_directory / "commands"
 control_directory.mkdir(parents=True, exist_ok=True)
 policy_selection_path = output_directory / "selected_policy.json"
+task_selection_path = output_directory / "selected_task.json"
+task_mode = "state"
+try:
+    selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
+    if selected_task.get("task") == "vision":
+        task_mode = "vision"
+except (OSError, ValueError, TypeError):
+    pass
 policy_selection = {}
 try:
     policy_selection = json.loads(policy_selection_path.read_text(encoding="utf-8"))
@@ -84,12 +94,15 @@ def stop_worker(_signum: int, _frame: object) -> None:
 
 signal.signal(signal.SIGTERM, stop_worker)
 signal.signal(signal.SIGINT, stop_worker)
-atomic_json(status_path, {"status": "starting", "task": args.task})
+atomic_json(status_path, {"status": "starting", "task": task_mode})
 
 env = None
 started_at = time.monotonic()
 try:
-    effective_task = "Isaac-Lift-Cube-Franka-Play-v0" if checkpoint_id else args.task
+    if task_mode == "vision":
+        effective_task = "Isaac-Lift-Cube-Franka-Vision-Play-v0"
+    else:
+        effective_task = "Isaac-Lift-Cube-Franka-Play-v0" if checkpoint_id else args.task
     env_cfg = parse_env_cfg(effective_task, device=args.device, num_envs=1)
     env_cfg.seed = 42
     if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
@@ -115,6 +128,12 @@ try:
     env = gym.make(effective_task, cfg=env_cfg)
     env.reset()
     camera = env.unwrapped.scene["web_camera"]
+    if task_mode == "vision":
+        vision_camera = env.unwrapped.scene["vision_camera"]
+        vision_camera.set_world_poses_from_view(
+            torch.tensor([[1.25, 0.90, 0.90]], dtype=torch.float32, device=env.unwrapped.device),
+            torch.tensor([[0.48, 0.0, 0.16]], dtype=torch.float32, device=env.unwrapped.device),
+        )
     default_camera_target = torch.tensor(
         [[0.45, 0.0, 0.45]], dtype=torch.float32, device=env.unwrapped.device
     )
@@ -347,7 +366,7 @@ try:
                     checkpoint_id = str(command["id"])
                     atomic_json(status_path, {
                         "status": "ready",
-                        "task": effective_task,
+                        "task": task_mode,
                         "mode": "trained_policy",
                         "checkpoint": checkpoint_id,
                         "hot_swapped_at": time.time(),
@@ -377,7 +396,7 @@ try:
         status_path,
         {
             "status": "ready",
-            "task": effective_task,
+            "task": task_mode,
             "mode": "trained_policy" if inference_policy else "scripted_preview",
             "checkpoint": checkpoint_id,
             "startup_seconds": round(time.monotonic() - started_at, 3),
@@ -422,13 +441,28 @@ try:
                 quality=max(50, min(95, args.jpeg_quality)),
             )
             os.replace(image_path, frame_path)
+            if task_mode == "vision" and step % 3 == 0:
+                vision_frame = (
+                    env.unwrapped.scene["vision_camera"]
+                    .data.output["rgb"][0]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                vision_image_path = vision_frame_path.with_suffix(".jpg.next")
+                Image.fromarray(np.asarray(vision_frame, dtype=np.uint8)).save(
+                    vision_image_path,
+                    format="JPEG",
+                    quality=max(50, min(92, args.jpeg_quality)),
+                )
+                os.replace(vision_image_path, vision_frame_path)
 
             simulation_time = step * float(env.unwrapped.step_dt)
             atomic_json(
                 metadata_path,
                 {
                     "engine": "isaaclab",
-                    "task": effective_task,
+                    "task": task_mode,
                     "episode": episode,
                     "step": step,
                     "reward": float(rewards[0].item()),
