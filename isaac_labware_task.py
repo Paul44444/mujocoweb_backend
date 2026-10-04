@@ -68,7 +68,12 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             # The wrapper origin is at the tube base; the cylinder origin is
             # at its center, hence the local -5 cm offset.
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
-            spawn=sim_utils.UsdFileCfg(usd_path=str(LABWARE_ASSET_DIR / "test_tube.usda")),
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=str(LABWARE_ASSET_DIR / "test_tube.usda"),
+                visual_material=PreviewSurfaceCfg(
+                    diffuse_color=(0.08, 0.72, 0.95), emissive_color=(0.02, 0.12, 0.18), opacity=1.0, roughness=0.24
+                ),
+            ),
         )
 
         # Detailed rack visuals.  Invisible primitive rails below remain the
@@ -105,11 +110,34 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             "z": (0.0, 0.0),
             "yaw": (-0.20, 0.20),
         }
-        self.rewards.lifting_object.params["minimal_height"] = 0.075
-        self.rewards.object_goal_tracking.params["minimal_height"] = 0.045
-        self.rewards.object_goal_tracking_fine_grained.params["minimal_height"] = 0.045
+        self.rewards.lifting_object.params["minimal_height"] = 0.12
+        self.rewards.object_goal_tracking.params["minimal_height"] = 0.10
+        self.rewards.object_goal_tracking_fine_grained.params["minimal_height"] = 0.10
         self.rewards.object_goal_tracking.weight = 22.0
         self.rewards.object_goal_tracking_fine_grained.weight = 12.0
+
+
+@configclass
+class FrankaTestTubeLiftEnvCfg(FrankaLabwarePlacementEnvCfg):
+    """First-stage curriculum: reach, grasp, and lift the tube only."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.episode_length_s = 6.0
+        self.rewards.reaching_object.weight = 2.0
+        self.rewards.lifting_object.params["minimal_height"] = 0.12
+        self.rewards.lifting_object.weight = 25.0
+        self.rewards.object_goal_tracking = None
+        self.rewards.object_goal_tracking_fine_grained = None
+
+
+@configclass
+class FrankaTestTubeLiftEnvCfg_PLAY(FrankaTestTubeLiftEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
 
 
 @configclass
@@ -121,17 +149,35 @@ class FrankaLabwarePlacementEnvCfg_PLAY(FrankaLabwarePlacementEnvCfg):
         self.observations.policy.enable_corruption = False
 
 
+_BASE_LIFT_RUNNER = LiftCubePPORunnerCfg()
+
+
+@configclass
+class TestTubeLiftPPORunnerCfg(LiftCubePPORunnerCfg):
+    experiment_name = "franka_test_tube_lift"
+    policy = _BASE_LIFT_RUNNER.policy.replace(init_noise_std=0.65, noise_std_type="log")
+    algorithm = _BASE_LIFT_RUNNER.algorithm.replace(
+        entropy_coef=0.003, learning_rate=5.0e-5, max_grad_norm=0.5
+    )
+
+
 @configclass
 class LabwarePlacementPPORunnerCfg(LiftCubePPORunnerCfg):
     experiment_name = "franka_labware_placement"
+    policy = _BASE_LIFT_RUNNER.policy.replace(init_noise_std=0.65, noise_std_type="log")
+    algorithm = _BASE_LIFT_RUNNER.algorithm.replace(
+        entropy_coef=0.003, learning_rate=5.0e-5, max_grad_norm=0.5
+    )
 
 
 def register_tasks() -> None:
     registrations = {
-        "Isaac-Franka-Labware-Placement-v0": FrankaLabwarePlacementEnvCfg,
-        "Isaac-Franka-Labware-Placement-Play-v0": FrankaLabwarePlacementEnvCfg_PLAY,
+        "Isaac-Franka-Test-Tube-Lift-v0": (FrankaTestTubeLiftEnvCfg, TestTubeLiftPPORunnerCfg),
+        "Isaac-Franka-Test-Tube-Lift-Play-v0": (FrankaTestTubeLiftEnvCfg_PLAY, TestTubeLiftPPORunnerCfg),
+        "Isaac-Franka-Labware-Placement-v0": (FrankaLabwarePlacementEnvCfg, LabwarePlacementPPORunnerCfg),
+        "Isaac-Franka-Labware-Placement-Play-v0": (FrankaLabwarePlacementEnvCfg_PLAY, LabwarePlacementPPORunnerCfg),
     }
-    for task_id, config in registrations.items():
+    for task_id, (config, runner_config) in registrations.items():
         if task_id in gym.registry:
             continue
         gym.register(
@@ -139,7 +185,7 @@ def register_tasks() -> None:
             entry_point="isaaclab.envs:ManagerBasedRLEnv",
             kwargs={
                 "env_cfg_entry_point": config,
-                "rsl_rl_cfg_entry_point": LabwarePlacementPPORunnerCfg,
+                "rsl_rl_cfg_entry_point": runner_config,
             },
             disable_env_checker=True,
         )

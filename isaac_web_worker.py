@@ -60,7 +60,7 @@ task_selection_path = output_directory / "selected_task.json"
 task_mode = "state"
 try:
     selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-    if selected_task.get("task") in {"vision", "labware"}:
+    if selected_task.get("task") in {"vision", "labware_lift", "labware"}:
         task_mode = selected_task["task"]
 except (OSError, ValueError, TypeError):
     pass
@@ -120,6 +120,8 @@ started_at = time.monotonic()
 try:
     if task_mode == "vision":
         effective_task = "Isaac-Lift-Cube-Franka-Vision-Play-v0"
+    elif task_mode == "labware_lift":
+        effective_task = "Isaac-Franka-Test-Tube-Lift-Play-v0"
     elif task_mode == "labware":
         effective_task = "Isaac-Franka-Labware-Placement-Play-v0"
     else:
@@ -171,6 +173,7 @@ try:
     camera_presets = {
         "state": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
         "vision": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
+        "labware_lift": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])

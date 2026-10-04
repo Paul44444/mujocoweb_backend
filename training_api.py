@@ -45,11 +45,11 @@ class StartTrainingRequest(BaseModel):
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
-    isaac_task: Literal["state", "vision", "labware"] = "state"
+    isaac_task: Literal["state", "vision", "labware_lift", "labware"] = "state"
 
 
 class SelectIsaacTaskRequest(BaseModel):
-    task: Literal["state", "vision", "labware"]
+    task: Literal["state", "vision", "labware_lift", "labware"]
 
 
 class SelectCheckpointRequest(BaseModel):
@@ -116,7 +116,9 @@ def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, obj
             continue
         if isaac_task == "vision" and run_task not in {"state", "vision"}:
             continue
-        if isaac_task == "labware" and run_task != "labware":
+        if isaac_task == "labware_lift" and run_task != "labware_lift":
+            continue
+        if isaac_task == "labware" and run_task not in {"labware_lift", "labware"}:
             continue
         for path in sorted(
             (run_directory / "checkpoints").glob("model_*.pt"),
@@ -219,7 +221,7 @@ def _active_run() -> Dict[str, object] | None:
 @router.get("/runs")
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
-    isaac_task: Optional[Literal["state", "vision", "labware"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware"]] = Query(default=None),
 ) -> Dict[str, List[Dict[str, object]]]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
@@ -242,7 +244,7 @@ def get_training_run(run_id: str) -> Dict[str, object]:
 
 @router.get("/checkpoints")
 def list_checkpoints(
-    isaac_task: Optional[Literal["state", "vision", "labware"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware"]] = Query(default=None),
 ) -> Dict[str, object]:
     selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
     return {"checkpoints": _checkpoint_payloads(isaac_task), "selected": selected}
@@ -296,7 +298,11 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
         path = _checkpoint_path(request.checkpoint)
         run_config = _read_json(path.parent.parent / "config.json", {})
         checkpoint_task = run_config.get("isaac_task", "state")
-        compatible = checkpoint_task == current_task or (current_task == "vision" and checkpoint_task == "state")
+        compatible = (
+            checkpoint_task == current_task
+            or (current_task == "vision" and checkpoint_task == "state")
+            or (current_task == "labware" and checkpoint_task == "labware_lift")
+        )
         if not compatible:
             raise HTTPException(status_code=409, detail="This checkpoint is not observation-compatible with the active Isaac task.")
         payload = {"id": request.checkpoint, "path": str(path), "isaac_task": checkpoint_task, "selected_at": time.time()}
@@ -348,7 +354,11 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
             resume_path = _checkpoint_path(request.resume_checkpoint)
             resume_config = _read_json(resume_path.parent.parent / "config.json", {})
             resume_task = resume_config.get("isaac_task", "state")
-            compatible = resume_task == request.isaac_task or (request.isaac_task == "vision" and resume_task == "state")
+            compatible = (
+                resume_task == request.isaac_task
+                or (request.isaac_task == "vision" and resume_task == "state")
+                or (request.isaac_task == "labware" and resume_task == "labware_lift")
+            )
             if not compatible:
                 raise HTTPException(status_code=422, detail="The resume checkpoint is not observation-compatible with this Isaac task.")
         active = _active_run()
