@@ -45,11 +45,11 @@ class StartTrainingRequest(BaseModel):
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
-    isaac_task: Literal["state", "vision"] = "state"
+    isaac_task: Literal["state", "vision", "labware"] = "state"
 
 
 class SelectIsaacTaskRequest(BaseModel):
-    task: Literal["state", "vision"]
+    task: Literal["state", "vision", "labware"]
 
 
 class SelectCheckpointRequest(BaseModel):
@@ -115,6 +115,8 @@ def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, obj
         if isaac_task == "state" and run_task != "state":
             continue
         if isaac_task == "vision" and run_task not in {"state", "vision"}:
+            continue
+        if isaac_task == "labware" and run_task != "labware":
             continue
         for path in sorted(
             (run_directory / "checkpoints").glob("model_*.pt"),
@@ -217,7 +219,7 @@ def _active_run() -> Dict[str, object] | None:
 @router.get("/runs")
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
-    isaac_task: Optional[Literal["state", "vision"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware"]] = Query(default=None),
 ) -> Dict[str, List[Dict[str, object]]]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
@@ -240,7 +242,7 @@ def get_training_run(run_id: str) -> Dict[str, object]:
 
 @router.get("/checkpoints")
 def list_checkpoints(
-    isaac_task: Optional[Literal["state", "vision"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware"]] = Query(default=None),
 ) -> Dict[str, object]:
     selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
     return {"checkpoints": _checkpoint_payloads(isaac_task), "selected": selected}

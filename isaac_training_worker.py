@@ -26,8 +26,16 @@ ISAACLAB_PYTHON = Path(
 )
 TRAIN_SCRIPT = ISAACLAB_ROOT / "scripts" / "reinforcement_learning" / "rsl_rl" / "train.py"
 VISION_TRAIN_SCRIPT = ROOT / "isaac_vision_train.py"
-TASKS = {"state": "Isaac-Lift-Cube-Franka-v0", "vision": "Isaac-Lift-Cube-Franka-Vision-v0"}
-EXPERIMENTS = {"state": "franka_lift", "vision": "franka_lift_vision"}
+TASKS = {
+    "state": "Isaac-Lift-Cube-Franka-v0",
+    "vision": "Isaac-Lift-Cube-Franka-Vision-v0",
+    "labware": "Isaac-Franka-Labware-Placement-v0",
+}
+EXPERIMENTS = {
+    "state": "franka_lift",
+    "vision": "franka_lift_vision",
+    "labware": "franka_labware_placement",
+}
 # This installed Isaac Lab release parses ``--experiment_name`` but keeps the
 # task's registered experiment name. Keep discovery aligned with that output.
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -77,13 +85,13 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--num-envs", type=int, choices=(16, 32, 64, 128, 256, 512), required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--isaac-task", choices=("state", "vision"), default="state")
+    parser.add_argument("--isaac-task", choices=("state", "vision", "labware"), default="state")
     parser.add_argument("--resume-checkpoint")
     parser.add_argument("--resume-checkpoint-id")
     args = parser.parse_args()
     task = TASKS[args.isaac_task]
     experiment = EXPERIMENTS[args.isaac_task]
-    train_script = VISION_TRAIN_SCRIPT if args.isaac_task == "vision" else TRAIN_SCRIPT
+    train_script = VISION_TRAIN_SCRIPT if args.isaac_task in {"vision", "labware"} else TRAIN_SCRIPT
 
     run_directory = Path(args.run_directory).resolve()
     run_directory.mkdir(parents=True, exist_ok=True)

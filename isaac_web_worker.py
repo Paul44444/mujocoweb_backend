@@ -43,6 +43,7 @@ from isaaclab_assets.robots import KUKA_ALLEGRO_CFG
 from isaaclab.sensors import CameraCfg
 import isaaclab_tasks  # noqa: F401
 import isaac_vision_task
+import isaac_labware_task  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 
@@ -59,8 +60,8 @@ task_selection_path = output_directory / "selected_task.json"
 task_mode = "state"
 try:
     selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-    if selected_task.get("task") == "vision":
-        task_mode = "vision"
+    if selected_task.get("task") in {"vision", "labware"}:
+        task_mode = selected_task["task"]
 except (OSError, ValueError, TypeError):
     pass
 policy_selection = {}
@@ -119,6 +120,8 @@ started_at = time.monotonic()
 try:
     if task_mode == "vision":
         effective_task = "Isaac-Lift-Cube-Franka-Vision-Play-v0"
+    elif task_mode == "labware":
+        effective_task = "Isaac-Franka-Labware-Placement-Play-v0"
     else:
         effective_task = "Isaac-Lift-Cube-Franka-Play-v0" if checkpoint_id else args.task
     env_cfg = parse_env_cfg(effective_task, device=args.device, num_envs=1)

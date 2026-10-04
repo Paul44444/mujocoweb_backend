@@ -9,6 +9,11 @@ source = script.read_text(encoding="utf-8")
 marker = "import isaaclab_tasks  # noqa: F401"
 if marker not in source:
     raise RuntimeError("Isaac Lab train.py registration marker changed")
-source = source.replace(marker, marker + "\nimport isaac_vision_task  # register web vision environments", 1)
+source = source.replace(
+    marker,
+    marker + "\nimport isaac_vision_task  # register web vision environments"
+    + "\nimport isaac_labware_task  # register web labware environments",
+    1,
+)
 namespace = {"__name__": "__main__", "__file__": str(script)}
 exec(compile(source, str(script), "exec"), namespace)
