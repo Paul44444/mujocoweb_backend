@@ -165,11 +165,20 @@ try:
         # initialization poses unless explicitly reset/synchronized.
         vision_camera.reset()
         vision_camera_side.reset()
+    # Keep camera framing independent per environment.  In particular, the
+    # long-standing cube preset stays byte-for-byte unchanged while labware is
+    # framed closer and lower around the tube/rack workspace.
+    camera_presets = {
+        "state": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
+        "vision": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
+        "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
+    }
+    camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
-        [[0.45, 0.0, 0.45]], dtype=torch.float32, device=env.unwrapped.device
+        [camera_preset["target"]], dtype=torch.float32, device=env.unwrapped.device
     )
     camera_target = default_camera_target.clone()
-    default_camera = (62.0, 20.0, 2.15)
+    default_camera = camera_preset["orbit"]
     camera_state = {
         "azimuth": default_camera[0],
         "elevation": default_camera[1],
@@ -515,6 +524,8 @@ try:
                     "mode": "trained_policy" if inference_policy else "scripted_preview",
                     "checkpoint": checkpoint_id,
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
+                    "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
+                    "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
                     "camera": {
                         "azimuth": camera_state["azimuth"],
                         "elevation": camera_state["elevation"],

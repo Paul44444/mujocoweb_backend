@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "TestTubeRack"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "TestTubeRack"
+{
+    double3 xformOp:translate = (0, 0, 0.06059)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Xform "Geometry" (
+        prepend references = @source/rack_source.usdc@</test_tube_mutations/Meshes/Sketchfab_model/d960c368a66d420aa4937dd8b0ecbb31_fbx/RootNode/Rack>
+    )
+    {
+        float3 xformOp:rotateXYZ = (0, 0, 0)
+        double3 xformOp:scale = (0.12, 0.12, 0.12)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+    }
+}

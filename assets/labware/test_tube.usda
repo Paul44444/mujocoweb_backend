@@ -1,0 +1,20 @@
+#usda 1.0
+(
+    defaultPrim = "TestTube"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "TestTube"
+{
+    double3 xformOp:translate = (-0.0714414641, 0.0300954465, -0.0717774028)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Xform "Geometry" (
+        prepend references = @source/tube_visual_clean.usda@</test_tube_mutations>
+    )
+    {
+        double3 xformOp:scale = (0.0012, 0.0012, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+    }
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gymnasium as gym
+from pathlib import Path
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
@@ -11,6 +12,9 @@ from isaaclab.sim.spawners.materials.visual_materials_cfg import PreviewSurfaceC
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.lift.config.franka.agents.rsl_rl_ppo_cfg import LiftCubePPORunnerCfg
 from isaaclab_tasks.manager_based.manipulation.lift.config.franka.joint_pos_env_cfg import FrankaCubeLiftEnvCfg
+
+
+LABWARE_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "labware"
 
 
 def rack_bar(name: str, position: tuple[float, float, float], size: tuple[float, float, float]) -> AssetBaseCfg:
@@ -23,6 +27,7 @@ def rack_bar(name: str, position: tuple[float, float, float], size: tuple[float,
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=PreviewSurfaceCfg(diffuse_color=(0.12, 0.32, 0.48), metallic=0.15, roughness=0.32),
             physics_material=RigidBodyMaterialCfg(static_friction=0.8, dynamic_friction=0.65),
+            visible=False,
         ),
     )
 
@@ -32,25 +37,50 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        # A light, graspable 10 cm laboratory tube.  The detailed source USDs
-        # remain available under assets/labware for the next visual refinement.
+        # Keep a simple, stable collision body and attach the detailed mesh as
+        # its child.  This avoids using the high-poly imported surface as a
+        # PhysX collider while the rendered tube follows the rigid body exactly.
         self.scene.object = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Object",
             init_state=RigidObjectCfg.InitialStateCfg(pos=(0.48, -0.16, 0.052), rot=(1.0, 0.0, 0.0, 0.0)),
-            spawn=sim_utils.CapsuleCfg(
-                radius=0.012,
+            spawn=sim_utils.CylinderCfg(
+                radius=0.010,
                 height=0.10,
                 axis="Z",
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=2,
-                    max_depenetration_velocity=1.0,
+                    max_depenetration_velocity=0.20,
+                    max_linear_velocity=1.5,
+                    max_angular_velocity=8.0,
+                    linear_damping=0.15,
+                    angular_damping=0.20,
                     disable_gravity=False,
                 ),
                 collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.003, rest_offset=0.0),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.018),
                 physics_material=RigidBodyMaterialCfg(static_friction=0.7, dynamic_friction=0.55),
-                visual_material=PreviewSurfaceCfg(diffuse_color=(0.25, 0.78, 0.92), opacity=0.72, roughness=0.18),
+                visual_material=PreviewSurfaceCfg(diffuse_color=(0.25, 0.78, 0.92), opacity=0.0),
+            ),
+        )
+        self.scene.tube_visual = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/Object/TubeVisual",
+            # The wrapper origin is at the tube base; the cylinder origin is
+            # at its center, hence the local -5 cm offset.
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
+            spawn=sim_utils.UsdFileCfg(usd_path=str(LABWARE_ASSET_DIR / "test_tube.usda")),
+        )
+
+        # Detailed rack visuals.  Invisible primitive rails below remain the
+        # collision representation, which is considerably more stable for PPO.
+        self.scene.rack_visual = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/RackVisual",
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.18, 0.0)),
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=str(LABWARE_ASSET_DIR / "test_tube_rack.usda"),
+                visual_material=PreviewSurfaceCfg(
+                    diffuse_color=(0.10, 0.34, 0.56), metallic=0.18, roughness=0.28
+                ),
             ),
         )
 
