@@ -423,7 +423,7 @@ try:
     def capture_demo_initial_state() -> dict[str, np.ndarray]:
         """Capture enough simulator state to replay a demo from its exact start pose."""
         object_asset = env.unwrapped.scene["object"]
-        return {
+        initial_state = {
             "initial_robot_joint_pos": robot.data.joint_pos[0].detach().cpu().numpy().copy(),
             "initial_robot_joint_vel": robot.data.joint_vel[0].detach().cpu().numpy().copy(),
             "initial_robot_root_pose": robot.data.root_pose_w[0].detach().cpu().numpy().copy(),
@@ -432,9 +432,21 @@ try:
             "initial_object_root_velocity": object_asset.data.root_vel_w[0].detach().cpu().numpy().copy(),
             "initial_end_effector_pose": robot.data.body_pose_w[0, hand_body_index].detach().cpu().numpy().copy(),
         }
+        if "object_pose" in env.unwrapped.command_manager.active_terms:
+            command_term = env.unwrapped.command_manager.get_term("object_pose")
+            initial_state["initial_task_target_pose"] = (
+                command_term.command[0].detach().cpu().numpy().copy()
+            )
+        return initial_state
+
+    def freeze_demo_task_target() -> None:
+        """Prevent Isaac Lab from choosing a new task target during recording/playback."""
+        if "object_pose" in env.unwrapped.command_manager.active_terms:
+            command_term = env.unwrapped.command_manager.get_term("object_pose")
+            command_term.time_left.fill_(24.0 * 60.0 * 60.0)
 
     def restore_demo_initial_state(initial_state: dict[str, np.ndarray]) -> None:
-        """Restore a v2 demonstration's robot/object state after resetting manager state."""
+        """Restore a modern demonstration's robot, object, and task-target state."""
         device = env.unwrapped.device
         object_asset = env.unwrapped.scene["object"]
 
@@ -448,6 +460,11 @@ try:
         )
         object_asset.write_root_pose_to_sim(tensor("initial_object_root_pose"))
         object_asset.write_root_velocity_to_sim(tensor("initial_object_root_velocity"))
+        if "initial_task_target_pose" in initial_state:
+            command_term = env.unwrapped.command_manager.get_term("object_pose")
+            command_term.command.copy_(tensor("initial_task_target_pose"))
+            freeze_demo_task_target()
+            env.unwrapped.command_manager.compute(dt=0.0)
         env.unwrapped.episode_length_buf.zero_()
         env.unwrapped.scene.update(dt=0.0)
 
@@ -473,7 +490,7 @@ try:
         atomic_json(user_directory / f"{stem}.json", {
             "name": demo_state["name"], "task": task_mode, "steps": len(demo_state["actions"]),
             "duration": round(len(demo_state["actions"]) * float(env.unwrapped.step_dt), 3),
-            "created_at": time.time(), "format": "isaaclab-observation-action-v2",
+            "created_at": time.time(), "format": "isaaclab-observation-action-v3",
         })
         print(f"Saved web demonstration {user}/{stem} ({len(demo_state['actions'])} steps)", flush=True)
 
@@ -583,6 +600,7 @@ try:
                     reset_teleop_target()
                     set_teleop_drive_gains(True)
                     demo_state["initial_state"] = capture_demo_initial_state()
+                    freeze_demo_task_target()
                     # Human teleoperation must not race the six-second RL
                     # horizon. Keep physical failure terminations active, but
                     # move the timeout far beyond any practical demo length.
@@ -614,6 +632,10 @@ try:
                             {key: np.asarray(payload[key], dtype=np.float32).copy() for key in state_keys}
                             if all(key in payload.files for key in state_keys) else None
                         )
+                        if initial_state is not None and "initial_task_target_pose" in payload.files:
+                            initial_state["initial_task_target_pose"] = np.asarray(
+                                payload["initial_task_target_pose"], dtype=np.float32
+                            ).copy()
                     set_teleop_drive_gains(True)
                     env.unwrapped.cfg.episode_length_s = 24.0 * 60.0 * 60.0
                     demo_state["playback"] = playback
@@ -622,6 +644,7 @@ try:
                     demo_state["active"] = False
                     demo_state["recording"] = False
                     reset = env.reset()
+                    freeze_demo_task_target()
                     policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
                     if initial_state is not None:
                         restore_demo_initial_state(initial_state)
