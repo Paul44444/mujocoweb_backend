@@ -375,7 +375,7 @@ try:
         "active": False, "recording": False, "name": "Demo", "user": "Guest",
         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0,
         "observations": [], "actions": [], "ee_positions": [], "object_positions": [],
-        "playback": None, "playback_index": 0,
+        "playback": None, "playback_index": 0, "normal_episode_length_s": float(env.unwrapped.cfg.episode_length_s),
     }
     robot = env.unwrapped.scene["robot"]
     hand_body_index = robot.body_names.index("panda_hand")
@@ -494,6 +494,10 @@ try:
                         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],
                         "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0})
                     teleop_joint_target = robot.data.joint_pos[0, :7].clone()
+                    # Human teleoperation must not race the six-second RL
+                    # horizon. Keep physical failure terminations active, but
+                    # move the timeout far beyond any practical demo length.
+                    env.unwrapped.cfg.episode_length_s = 24.0 * 60.0 * 60.0
                     simulation_paused = False
                     print(f"Started web demonstration recording: {command['user']}/{command['name']}", flush=True)
                 elif command_type == "demo_control":
@@ -503,6 +507,7 @@ try:
                             demo_state["gripper"] = float(command["gripper"])
                 elif command_type == "demo_stop":
                     save_demo()
+                    env.unwrapped.cfg.episode_length_s = demo_state["normal_episode_length_s"]
                     demo_state["active"] = False
                     demo_state["recording"] = False
                     demo_state["movement"] = np.zeros(3, dtype=np.float32)
