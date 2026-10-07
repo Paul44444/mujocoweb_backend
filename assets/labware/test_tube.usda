@@ -7,14 +7,15 @@
 
 def Xform "TestTube"
 {
-    double3 xformOp:translate = (-0.0714414641, 0.0300954465, -0.0717774028)
-    uniform token[] xformOpOrder = ["xformOp:translate"]
-
     def Xform "Geometry" (
         prepend references = @source/tube_visual_clean.usda@</test_tube_mutations>
     )
     {
+        # Keep the source-mesh centering below the spawned root. Isaac Lab
+        # authors the asset init pose on TestTube and would otherwise replace
+        # this correction, visibly separating the mesh from its collider.
+        double3 xformOp:translate = (-0.0714414641, 0.0300954465, -0.0717774028)
         double3 xformOp:scale = (0.0012, 0.0012, 0.0012)
-        uniform token[] xformOpOrder = ["xformOp:scale"]
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
     }
 }
