@@ -377,7 +377,9 @@ try:
         "active": False, "recording": False, "name": "Demo", "user": "Guest",
         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0,
         "observations": [], "actions": [], "ee_positions": [], "object_positions": [],
-        "playback": None, "playback_index": 0, "normal_episode_length_s": float(env.unwrapped.cfg.episode_length_s),
+        "playback": None, "playback_index": 0, "playback_last_action": None,
+        "initial_state": None,
+        "normal_episode_length_s": float(env.unwrapped.cfg.episode_length_s),
     }
     robot = env.unwrapped.scene["robot"]
     hand_body_index = robot.body_names.index("panda_hand")
@@ -418,6 +420,37 @@ try:
 
     reset_teleop_target()
 
+    def capture_demo_initial_state() -> dict[str, np.ndarray]:
+        """Capture enough simulator state to replay a demo from its exact start pose."""
+        object_asset = env.unwrapped.scene["object"]
+        return {
+            "initial_robot_joint_pos": robot.data.joint_pos[0].detach().cpu().numpy().copy(),
+            "initial_robot_joint_vel": robot.data.joint_vel[0].detach().cpu().numpy().copy(),
+            "initial_robot_root_pose": robot.data.root_pose_w[0].detach().cpu().numpy().copy(),
+            "initial_robot_root_velocity": robot.data.root_vel_w[0].detach().cpu().numpy().copy(),
+            "initial_object_root_pose": object_asset.data.root_pose_w[0].detach().cpu().numpy().copy(),
+            "initial_object_root_velocity": object_asset.data.root_vel_w[0].detach().cpu().numpy().copy(),
+            "initial_end_effector_pose": robot.data.body_pose_w[0, hand_body_index].detach().cpu().numpy().copy(),
+        }
+
+    def restore_demo_initial_state(initial_state: dict[str, np.ndarray]) -> None:
+        """Restore a v2 demonstration's robot/object state after resetting manager state."""
+        device = env.unwrapped.device
+        object_asset = env.unwrapped.scene["object"]
+
+        def tensor(name: str) -> torch.Tensor:
+            return torch.as_tensor(initial_state[name], dtype=torch.float32, device=device).reshape(1, -1)
+
+        robot.write_root_pose_to_sim(tensor("initial_robot_root_pose"))
+        robot.write_root_velocity_to_sim(tensor("initial_robot_root_velocity"))
+        robot.write_joint_state_to_sim(
+            tensor("initial_robot_joint_pos"), tensor("initial_robot_joint_vel")
+        )
+        object_asset.write_root_pose_to_sim(tensor("initial_object_root_pose"))
+        object_asset.write_root_velocity_to_sim(tensor("initial_object_root_velocity"))
+        env.unwrapped.episode_length_buf.zero_()
+        env.unwrapped.scene.update(dt=0.0)
+
     def save_demo() -> None:
         if not demo_state["recording"] or not demo_state["actions"]:
             return
@@ -428,17 +461,19 @@ try:
         slug = "".join(char for char in slug if char.isalnum() or char in "-_.")[:64]
         stamp = time.strftime("%Y%m%d-%H%M%S")
         stem = f"{stamp}-{slug}"
+        initial_state = demo_state.get("initial_state") or capture_demo_initial_state()
         np.savez_compressed(
             user_directory / f"{stem}.npz",
             observations=np.asarray(demo_state["observations"], dtype=np.float32),
             actions=np.asarray(demo_state["actions"], dtype=np.float32),
             ee_positions=np.asarray(demo_state["ee_positions"], dtype=np.float32),
             object_positions=np.asarray(demo_state["object_positions"], dtype=np.float32),
+            **initial_state,
         )
         atomic_json(user_directory / f"{stem}.json", {
             "name": demo_state["name"], "task": task_mode, "steps": len(demo_state["actions"]),
             "duration": round(len(demo_state["actions"]) * float(env.unwrapped.step_dt), 3),
-            "created_at": time.time(), "format": "isaaclab-observation-action-v1",
+            "created_at": time.time(), "format": "isaaclab-observation-action-v2",
         })
         print(f"Saved web demonstration {user}/{stem} ({len(demo_state['actions'])} steps)", flush=True)
 
@@ -543,9 +578,11 @@ try:
                 elif command_type == "demo_start":
                     demo_state.update({"active": True, "recording": True, "name": command["name"], "user": command["user"],
                         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],
-                        "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0})
+                        "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0,
+                        "playback_last_action": None})
                     reset_teleop_target()
                     set_teleop_drive_gains(True)
+                    demo_state["initial_state"] = capture_demo_initial_state()
                     # Human teleoperation must not race the six-second RL
                     # horizon. Keep physical failure terminations active, but
                     # move the timeout far beyond any practical demo length.
@@ -566,15 +603,37 @@ try:
                     demo_state["movement"] = np.zeros(3, dtype=np.float32)
                     print("Stopped web demonstration recording", flush=True)
                 elif command_type == "demo_play":
-                    set_teleop_drive_gains(False)
-                    payload = np.load(command["path"])
-                    demo_state["playback"] = np.asarray(payload["actions"], dtype=np.float32)
+                    with np.load(command["path"]) as payload:
+                        playback = np.asarray(payload["actions"], dtype=np.float32).copy()
+                        state_keys = (
+                            "initial_robot_joint_pos", "initial_robot_joint_vel",
+                            "initial_robot_root_pose", "initial_robot_root_velocity",
+                            "initial_object_root_pose", "initial_object_root_velocity",
+                        )
+                        initial_state = (
+                            {key: np.asarray(payload[key], dtype=np.float32).copy() for key in state_keys}
+                            if all(key in payload.files for key in state_keys) else None
+                        )
+                    set_teleop_drive_gains(True)
+                    env.unwrapped.cfg.episode_length_s = 24.0 * 60.0 * 60.0
+                    demo_state["playback"] = playback
                     demo_state["playback_index"] = 0
+                    demo_state["playback_last_action"] = playback[-1:].copy() if len(playback) else None
                     demo_state["active"] = False
                     demo_state["recording"] = False
                     reset = env.reset()
                     policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
-                    print(f"Playing web demonstration {command['id']}", flush=True)
+                    if initial_state is not None:
+                        restore_demo_initial_state(initial_state)
+                        observations = env.unwrapped.observation_manager.compute(update_history=True)
+                        policy_observations = observations.get("policy") if isinstance(observations, dict) else observations
+                        print(f"Playing web demonstration {command['id']} from its recorded initial state", flush=True)
+                    else:
+                        print(
+                            f"Playing legacy web demonstration {command['id']} from the task reset state; "
+                            "record it again for exact start-pose playback",
+                            flush=True,
+                        )
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 print(f"Ignoring invalid Isaac web command: {exc}", flush=True)
             except Exception as exc:
@@ -641,7 +700,15 @@ try:
                         demo_state["playback_index"] = index + 1
                     else:
                         demo_state["playback"] = None
-                        actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+                        set_teleop_drive_gains(False)
+                        env.unwrapped.cfg.episode_length_s = demo_state["normal_episode_length_s"]
+                        last_action = demo_state.get("playback_last_action")
+                        actions = (
+                            torch.as_tensor(last_action, device=env.unwrapped.device)
+                            if last_action is not None
+                            else torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+                        )
+                        demo_state["playback_last_action"] = None
                     step_observations, rewards, terminated, truncated, _ = env.step(actions)
                     policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
                 elif demo_state["active"]:
