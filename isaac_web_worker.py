@@ -25,10 +25,13 @@ parser.add_argument("--task", default="Isaac-Lift-Cube-Franka-v0")
 parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
+parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware"))
+parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
-args.headless = True
+args.headless = not args.desktop
 
 launcher = AppLauncher(args)
 simulation_app = launcher.app
@@ -58,15 +61,17 @@ status_path = output_directory / "status.json"
 control_directory = output_directory / "commands"
 training_runs_directory = Path(__file__).resolve().parent / "web_training_runs"
 control_directory.mkdir(parents=True, exist_ok=True)
-policy_selection_path = output_directory / "selected_policy.json"
-task_selection_path = output_directory / "selected_task.json"
-task_mode = "state"
-try:
-    selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-    if selected_task.get("task") in {"vision", "labware_lift", "labware"}:
-        task_mode = selected_task["task"]
-except (OSError, ValueError, TypeError):
-    pass
+selection_directory = Path(args.selection_directory) if args.selection_directory else output_directory
+policy_selection_path = selection_directory / "selected_policy.json"
+task_selection_path = selection_directory / "selected_task.json"
+task_mode = args.task_mode or "state"
+if args.task_mode is None:
+    try:
+        selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
+        if selected_task.get("task") in {"vision", "labware_lift", "labware"}:
+            task_mode = selected_task["task"]
+    except (OSError, ValueError, TypeError):
+        pass
 policy_selection = {}
 try:
     policy_selection = json.loads(policy_selection_path.read_text(encoding="utf-8"))

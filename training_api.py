@@ -29,6 +29,10 @@ ISAAC_STATUS_PATH = ISAAC_OUTPUT_DIRECTORY / "status.json"
 ISAAC_FRAME_PATH = ISAAC_OUTPUT_DIRECTORY / "frame.jpg"
 ISAAC_METADATA_PATH = ISAAC_OUTPUT_DIRECTORY / "metadata.json"
 ISAAC_CONTROL_DIRECTORY = ISAAC_OUTPUT_DIRECTORY / "commands"
+ISAAC_DESKTOP_DIRECTORY = Path("/tmp/mujocoweb-isaac-desktop")
+ISAAC_DESKTOP_STATUS = ISAAC_DESKTOP_DIRECTORY / "launcher-status.json"
+ISAACLAB_PYTHON = Path(os.environ.get("ISAACLAB_PYTHON", "/home/paul/miniconda3/envs/env_isaaclab1/bin/python"))
+ISAAC_WEB_WORKER = ROOT / "isaac_web_worker.py"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 CHECKPOINT_PATTERN = re.compile(r"^model_\d+\.pt$")
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -268,6 +272,49 @@ def select_isaac_task(request: SelectIsaacTaskRequest, background_tasks: Backgro
     _write_json(ISAAC_STATUS_PATH, {"status": "restarting", "task": request.task})
     background_tasks.add_task(_restart_isaac_runtime)
     return {"task": request.task, "status": "restarting", "restarting": True, "estimated_seconds": 45}
+
+
+def _run_isaac_desktop(task: str) -> None:
+    ISAAC_DESKTOP_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    log_path = ISAAC_DESKTOP_DIRECTORY / "desktop.log"
+    process = None
+    try:
+        subprocess.run(["systemctl", "--user", "stop", "mujocoweb-isaac.service"], timeout=45, check=False)
+        environment = os.environ.copy()
+        environment.setdefault("DISPLAY", ":1")
+        environment.setdefault("XAUTHORITY", "/run/user/1000/gdm/Xauthority")
+        environment.setdefault("XDG_RUNTIME_DIR", "/run/user/1000")
+        with log_path.open("ab", buffering=0) as log_file:
+            process = subprocess.Popen([
+                str(ISAACLAB_PYTHON), str(ISAAC_WEB_WORKER),
+                "--device", "cuda:0", "--desktop", "--task-mode", task,
+                "--selection-directory", str(ISAAC_OUTPUT_DIRECTORY),
+                "--output-directory", str(ISAAC_DESKTOP_DIRECTORY),
+            ], cwd="/home/paul/IsaacLab", env=environment, stdin=subprocess.DEVNULL,
+               stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+        _write_json(ISAAC_DESKTOP_STATUS, {"status": "running", "pid": process.pid, "task": task})
+        return_code = process.wait()
+        _write_json(ISAAC_DESKTOP_STATUS, {"status": "closed", "return_code": return_code, "task": task})
+    except Exception as exc:
+        _write_json(ISAAC_DESKTOP_STATUS, {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "task": task})
+    finally:
+        subprocess.run(["systemctl", "--user", "start", "mujocoweb-isaac.service"], timeout=45, check=False)
+
+
+@router.post("/isaac-desktop")
+def open_isaac_desktop(background_tasks: BackgroundTasks) -> Dict[str, object]:
+    active = _active_run()
+    if active:
+        raise HTTPException(status_code=409, detail="Pause or cancel the active training run before opening Isaac Lab Desktop.")
+    current = _read_json(ISAAC_DESKTOP_STATUS, {})
+    pid = int(current.get("pid", 0) or 0)
+    if current.get("status") in {"starting", "running"} and pid and _is_alive(pid):
+        return {"status": "running", "task": current.get("task", "state")}
+    task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
+    ISAAC_DESKTOP_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    _write_json(ISAAC_DESKTOP_STATUS, {"status": "starting", "task": task})
+    background_tasks.add_task(_run_isaac_desktop, task)
+    return {"status": "starting", "task": task, "estimated_seconds": 30}
 
 
 @router.get("/checkpoints/status")
