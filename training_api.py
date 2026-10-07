@@ -312,10 +312,13 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, ISAAC_POLICY_SELECTION)
     current_status = _read_json(ISAAC_STATUS_PATH, {})
+    # A compatible actor can be installed in the warm playback environment
+    # regardless of whether it currently runs the scripted preview or another
+    # trained actor. Restarting Isaac Sim here needlessly competes with an
+    # active trainer for several gigabytes of GPU memory.
     hot_swap = bool(
         payload["id"]
         and current_status.get("status") == "ready"
-        and current_status.get("mode") == "trained_policy"
     )
     if hot_swap:
         status_temporary = ISAAC_STATUS_PATH.with_suffix(".json.next")

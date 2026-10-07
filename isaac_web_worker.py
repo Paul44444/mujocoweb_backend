@@ -23,6 +23,8 @@ parser = argparse.ArgumentParser(description="Warm Isaac Lab web renderer")
 parser.add_argument("--output-directory", default="/tmp/mujocoweb-isaac")
 parser.add_argument("--task", default="Isaac-Lift-Cube-Franka-v0")
 parser.add_argument("--jpeg-quality", type=int, default=86)
+parser.add_argument("--max-fps", type=float, default=20.0)
+parser.add_argument("--training-max-fps", type=float, default=5.0)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
@@ -54,6 +56,7 @@ vision_frame_path = output_directory / "vision_frame.jpg"
 metadata_path = output_directory / "metadata.json"
 status_path = output_directory / "status.json"
 control_directory = output_directory / "commands"
+training_runs_directory = Path(__file__).resolve().parent / "web_training_runs"
 control_directory.mkdir(parents=True, exist_ok=True)
 policy_selection_path = output_directory / "selected_policy.json"
 task_selection_path = output_directory / "selected_task.json"
@@ -459,6 +462,25 @@ try:
 
     step = 0
     episode = 0
+    next_frame_at = time.monotonic()
+    training_check_at = [0.0]
+    training_is_active = [False]
+
+    def refresh_training_activity(now: float) -> bool:
+        if now < training_check_at[0]:
+            return training_is_active[0]
+        training_check_at[0] = now + 2.0
+        training_is_active[0] = False
+        try:
+            for run_status_path in training_runs_directory.glob("*/status.json"):
+                run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+                if run_status.get("status") in {"starting", "training"}:
+                    training_is_active[0] = True
+                    break
+        except (OSError, ValueError, TypeError):
+            pass
+        return training_is_active[0]
+
     rewards = torch.zeros(1, dtype=torch.float32, device=env.unwrapped.device)
     terminated = torch.zeros(1, dtype=torch.bool, device=env.unwrapped.device)
     truncated = torch.zeros(1, dtype=torch.bool, device=env.unwrapped.device)
@@ -539,8 +561,19 @@ try:
                     "web_assets": web_assets,
                 },
             )
+            # RTX rendering used to run without a frame limit and could
+            # starve a simultaneous multi-environment trainer on the same GPU.
+            # Keep playback usable, but explicitly yield most GPU time while a
+            # training run is active. These are separate processes and no
+            # trainer state, environment, or metric file is touched here.
+            now = time.monotonic()
+            frame_rate = args.training_max_fps if refresh_training_activity(now) else args.max_fps
+            frame_period = 1.0 / max(1.0, frame_rate)
+            next_frame_at = max(next_frame_at + frame_period, now)
+            remaining = next_frame_at - time.monotonic()
+            if remaining > 0.0:
+                time.sleep(remaining)
             if simulation_paused:
-                time.sleep(0.03)
                 continue
             step += 1
             if bool(terminated[0].item() or truncated[0].item()):
