@@ -81,12 +81,12 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
             spawn=sim_utils.UsdFileCfg(
                 usd_path=str(LABWARE_ASSET_DIR / "test_tube.usda"),
-                # Keep only the outer mesh translucent; the red collider stays
-                # fully opaque so RTX can render their spatial relationship.
+                # Imported translucent materials disappear in the current RTX
+                # pipeline. Keep the mesh opaque and use the hierarchy eye
+                # toggle to compare TubeVisual with the red collider.
                 visual_material=PreviewSurfaceCfg(
                     diffuse_color=(0.02, 0.72, 1.0),
                     emissive_color=(0.0, 0.16, 0.24),
-                    opacity=0.38,
                     roughness=0.22,
                 ),
             ),
@@ -96,7 +96,7 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
         # collision representation, which is considerably more stable for PPO.
         self.scene.rack_visual = AssetBaseCfg(
             prim_path="{ENV_REGEX_NS}/RackVisual",
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.18, 0.0)),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.18, 0.055)),
             spawn=sim_utils.UsdFileCfg(
                 usd_path=str(LABWARE_ASSET_DIR / "test_tube_rack.usda"),
                 visual_material=PreviewSurfaceCfg(
