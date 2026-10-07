@@ -429,9 +429,9 @@ try:
     def teleop_action() -> torch.Tensor:
         movement = torch.as_tensor(demo_state["movement"], dtype=torch.float32, device=env.unwrapped.device)
         if torch.linalg.vector_norm(movement) > 0:
-            # About 3 cm/s at the 20 Hz web loop: slow enough for precise
-            # demonstrations and for the joint controller to track the IK pose.
-            teleop_target_pose_b[:, :3] += movement.unsqueeze(0) * 0.0015
+            # About 9 cm/s at the 20 Hz web loop: responsive while remaining
+            # slow enough for precise demonstrations and stable IK tracking.
+            teleop_target_pose_b[:, :3] += movement.unsqueeze(0) * 0.0045
             teleop_target_pose_b[:, 0].clamp_(0.20, 0.85)
             teleop_target_pose_b[:, 1].clamp_(-0.55, 0.55)
             teleop_target_pose_b[:, 2].clamp_(0.03, 0.90)
