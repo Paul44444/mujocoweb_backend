@@ -45,7 +45,9 @@ import torch
 
 import isaaclab.sim as sim_utils
 from isaaclab_assets.robots import KUKA_ALLEGRO_CFG
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.sensors import CameraCfg
+import isaaclab.utils.math as math_utils
 import isaaclab_tasks  # noqa: F401
 import isaac_vision_task
 import isaac_labware_task  # noqa: F401
@@ -380,7 +382,25 @@ try:
     robot = env.unwrapped.scene["robot"]
     hand_body_index = robot.body_names.index("panda_hand")
     jacobian_body_index = hand_body_index - 1 if robot.is_fixed_base else hand_body_index
-    teleop_joint_target = robot.data.joint_pos[0, :7].clone()
+    teleop_ik = DifferentialIKController(
+        DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+        num_envs=1,
+        device=env.unwrapped.device,
+    )
+    teleop_target_pose_b = torch.zeros((1, 7), dtype=torch.float32, device=env.unwrapped.device)
+
+    def reset_teleop_target() -> None:
+        root_pose_w = robot.data.root_pose_w[:1]
+        hand_pose_w = robot.data.body_pose_w[:1, hand_body_index]
+        ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
+            root_pose_w[:, :3], root_pose_w[:, 3:7], hand_pose_w[:, :3], hand_pose_w[:, 3:7]
+        )
+        teleop_target_pose_b[:, :3] = ee_pos_b
+        teleop_target_pose_b[:, 3:7] = ee_quat_b
+        teleop_ik.reset()
+        teleop_ik.set_command(teleop_target_pose_b)
+
+    reset_teleop_target()
 
     def save_demo() -> None:
         if not demo_state["recording"] or not demo_state["actions"]:
@@ -407,25 +427,39 @@ try:
         print(f"Saved web demonstration {user}/{stem} ({len(demo_state['actions'])} steps)", flush=True)
 
     def teleop_action() -> torch.Tensor:
-        global teleop_joint_target
         movement = torch.as_tensor(demo_state["movement"], dtype=torch.float32, device=env.unwrapped.device)
         if torch.linalg.vector_norm(movement) > 0:
-            jacobian = robot.root_physx_view.get_jacobians()[0, jacobian_body_index, :3, :7]
-            damping = 0.04
-            jj_t = jacobian @ jacobian.T
-            delta_q = jacobian.T @ torch.linalg.solve(
-                jj_t + (damping ** 2) * torch.eye(3, device=env.unwrapped.device), movement * 0.012
-            )
-            teleop_joint_target = teleop_joint_target + delta_q.clamp(-0.06, 0.06)
-            limits = robot.data.joint_pos_limits[0, :7]
-            teleop_joint_target = torch.max(torch.min(teleop_joint_target, limits[:, 1]), limits[:, 0])
+            # About 3 cm/s at the 20 Hz web loop: slow enough for precise
+            # demonstrations and for the joint controller to track the IK pose.
+            teleop_target_pose_b[:, :3] += movement.unsqueeze(0) * 0.0015
+            teleop_target_pose_b[:, 0].clamp_(0.20, 0.85)
+            teleop_target_pose_b[:, 1].clamp_(-0.55, 0.55)
+            teleop_target_pose_b[:, 2].clamp_(0.03, 0.90)
+            teleop_ik.set_command(teleop_target_pose_b)
+
+        root_pose_w = robot.data.root_pose_w[:1]
+        hand_pose_w = robot.data.body_pose_w[:1, hand_body_index]
+        ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
+            root_pose_w[:, :3], root_pose_w[:, 3:7], hand_pose_w[:, :3], hand_pose_w[:, 3:7]
+        )
+        jacobian = robot.root_physx_view.get_jacobians()[:1, jacobian_body_index, :, :7].clone()
+        base_rotation = math_utils.matrix_from_quat(math_utils.quat_inv(root_pose_w[:, 3:7]))
+        jacobian[:, :3, :] = torch.bmm(base_rotation, jacobian[:, :3, :])
+        jacobian[:, 3:, :] = torch.bmm(base_rotation, jacobian[:, 3:, :])
+        desired_joint_pos = teleop_ik.compute(
+            ee_pos_b, ee_quat_b, jacobian, robot.data.joint_pos[:1, :7]
+        )
         action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-        action[0, :7] = ((teleop_joint_target - robot.data.default_joint_pos[0, :7]) / 0.5).clamp(-1.0, 1.0)
+        # JointPositionActionCfg applies: target = default + action * 0.5.
+        # Do not clamp the inverse mapping to policy-style [-1, 1]: a valid
+        # current/IK joint pose can be farther than 0.5 rad from the default,
+        # and clipping it couples otherwise independent Cartesian axes.
+        action[0, :7] = (desired_joint_pos[0] - robot.data.default_joint_pos[0, :7]) / 0.5
         action[0, 7] = float(demo_state["gripper"])
         return action
 
     def apply_camera_commands() -> None:
-        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused, teleop_joint_target
+        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -493,7 +527,7 @@ try:
                     demo_state.update({"active": True, "recording": True, "name": command["name"], "user": command["user"],
                         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],
                         "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0})
-                    teleop_joint_target = robot.data.joint_pos[0, :7].clone()
+                    reset_teleop_target()
                     # Human teleoperation must not race the six-second RL
                     # horizon. Keep physical failure terminations active, but
                     # move the timeout far beyond any practical demo length.
@@ -664,6 +698,8 @@ try:
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
                     "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
+                    "end_effector_position": robot.data.body_pos_w[0, hand_body_index].tolist(),
+                    "demo_target_position": teleop_target_pose_b[0, :3].tolist() if demo_state["active"] else None,
                     "camera": {
                         "azimuth": camera_state["azimuth"],
                         "elevation": camera_state["elevation"],
