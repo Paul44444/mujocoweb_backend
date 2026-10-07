@@ -81,6 +81,8 @@ checkpoint_path = Path(policy_selection.get("path", "")) if policy_selection.get
 checkpoint_id = policy_selection.get("id") if checkpoint_path and checkpoint_path.is_file() else None
 stopping = False
 simulation_paused = False
+demo_directory = Path(os.environ.get("ISAAC_DEMO_DIRECTORY", Path.home() / ".local/share/mujocoweb/demos"))
+demo_directory.mkdir(parents=True, exist_ok=True)
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -369,8 +371,61 @@ try:
             update_camera_pose()
         print(f"Replaced Isaac web scene with {len(web_assets)} assets", flush=True)
 
+    demo_state = {
+        "active": False, "recording": False, "name": "Demo", "user": "Guest",
+        "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0,
+        "observations": [], "actions": [], "ee_positions": [], "object_positions": [],
+        "playback": None, "playback_index": 0,
+    }
+    robot = env.unwrapped.scene["robot"]
+    hand_body_index = robot.body_names.index("panda_hand")
+    jacobian_body_index = hand_body_index - 1 if robot.is_fixed_base else hand_body_index
+    teleop_joint_target = robot.data.joint_pos[0, :7].clone()
+
+    def save_demo() -> None:
+        if not demo_state["recording"] or not demo_state["actions"]:
+            return
+        user = str(demo_state["user"])
+        user_directory = demo_directory / user
+        user_directory.mkdir(parents=True, exist_ok=True)
+        slug = "-".join(str(demo_state["name"]).strip().split()) or "Demo"
+        slug = "".join(char for char in slug if char.isalnum() or char in "-_.")[:64]
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stem = f"{stamp}-{slug}"
+        np.savez_compressed(
+            user_directory / f"{stem}.npz",
+            observations=np.asarray(demo_state["observations"], dtype=np.float32),
+            actions=np.asarray(demo_state["actions"], dtype=np.float32),
+            ee_positions=np.asarray(demo_state["ee_positions"], dtype=np.float32),
+            object_positions=np.asarray(demo_state["object_positions"], dtype=np.float32),
+        )
+        atomic_json(user_directory / f"{stem}.json", {
+            "name": demo_state["name"], "task": task_mode, "steps": len(demo_state["actions"]),
+            "duration": round(len(demo_state["actions"]) * float(env.unwrapped.step_dt), 3),
+            "created_at": time.time(), "format": "isaaclab-observation-action-v1",
+        })
+        print(f"Saved web demonstration {user}/{stem} ({len(demo_state['actions'])} steps)", flush=True)
+
+    def teleop_action() -> torch.Tensor:
+        global teleop_joint_target
+        movement = torch.as_tensor(demo_state["movement"], dtype=torch.float32, device=env.unwrapped.device)
+        if torch.linalg.vector_norm(movement) > 0:
+            jacobian = robot.root_physx_view.get_jacobians()[0, jacobian_body_index, :3, :7]
+            damping = 0.04
+            jj_t = jacobian @ jacobian.T
+            delta_q = jacobian.T @ torch.linalg.solve(
+                jj_t + (damping ** 2) * torch.eye(3, device=env.unwrapped.device), movement * 0.012
+            )
+            teleop_joint_target = teleop_joint_target + delta_q.clamp(-0.06, 0.06)
+            limits = robot.data.joint_pos_limits[0, :7]
+            teleop_joint_target = torch.max(torch.min(teleop_joint_target, limits[:, 1]), limits[:, 0])
+        action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+        action[0, :7] = ((teleop_joint_target - robot.data.default_joint_pos[0, :7]) / 0.5).clamp(-1.0, 1.0)
+        action[0, 7] = float(demo_state["gripper"])
+        return action
+
     def apply_camera_commands() -> None:
-        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
+        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused, teleop_joint_target
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -434,6 +489,33 @@ try:
                         "hot_swapped_at": time.time(),
                     })
                     print(f"Hot-swapped Isaac web policy to {checkpoint_id}", flush=True)
+                elif command_type == "demo_start":
+                    demo_state.update({"active": True, "recording": True, "name": command["name"], "user": command["user"],
+                        "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],
+                        "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0})
+                    teleop_joint_target = robot.data.joint_pos[0, :7].clone()
+                    simulation_paused = False
+                    print(f"Started web demonstration recording: {command['user']}/{command['name']}", flush=True)
+                elif command_type == "demo_control":
+                    if demo_state["active"]:
+                        demo_state["movement"] = np.asarray(command["movement"], dtype=np.float32)
+                        if float(command.get("gripper", 0)) != 0:
+                            demo_state["gripper"] = float(command["gripper"])
+                elif command_type == "demo_stop":
+                    save_demo()
+                    demo_state["active"] = False
+                    demo_state["recording"] = False
+                    demo_state["movement"] = np.zeros(3, dtype=np.float32)
+                    print("Stopped web demonstration recording", flush=True)
+                elif command_type == "demo_play":
+                    payload = np.load(command["path"])
+                    demo_state["playback"] = np.asarray(payload["actions"], dtype=np.float32)
+                    demo_state["playback_index"] = 0
+                    demo_state["active"] = False
+                    demo_state["recording"] = False
+                    reset = env.reset()
+                    policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
+                    print(f"Playing web demonstration {command['id']}", flush=True)
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 print(f"Ignoring invalid Isaac web command: {exc}", flush=True)
             except Exception as exc:
@@ -493,7 +575,26 @@ try:
         while simulation_app.is_running() and not stopping:
             apply_camera_commands()
             if not simulation_paused:
-                if inference_policy is not None and policy_observations is not None:
+                if demo_state["playback"] is not None:
+                    index = int(demo_state["playback_index"])
+                    if index < len(demo_state["playback"]):
+                        actions = torch.as_tensor(demo_state["playback"][index:index + 1], device=env.unwrapped.device)
+                        demo_state["playback_index"] = index + 1
+                    else:
+                        demo_state["playback"] = None
+                        actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+                    step_observations, rewards, terminated, truncated, _ = env.step(actions)
+                    policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
+                elif demo_state["active"]:
+                    actions = teleop_action()
+                    if demo_state["recording"] and policy_observations is not None:
+                        demo_state["observations"].append(policy_observations[0].detach().cpu().numpy())
+                        demo_state["actions"].append(actions[0].detach().cpu().numpy())
+                        demo_state["ee_positions"].append(robot.data.body_pos_w[0, hand_body_index].detach().cpu().numpy())
+                        demo_state["object_positions"].append(env.unwrapped.scene["object"].data.root_pos_w[0].detach().cpu().numpy())
+                    step_observations, rewards, terminated, truncated, _ = env.step(actions)
+                    policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
+                elif inference_policy is not None and policy_observations is not None:
                     actions = inference_policy(policy_observations.cpu()).to(env.unwrapped.device)
                     step_observations, rewards, terminated, truncated, _ = env.step(actions)
                     policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
@@ -551,7 +652,9 @@ try:
                     "reward": float(rewards[0].item()),
                     "simulation_time": simulation_time,
                     "paused": simulation_paused,
-                    "mode": "trained_policy" if inference_policy else "scripted_preview",
+                    "mode": "demo_recording" if demo_state["recording"] else ("demo_playback" if demo_state["playback"] is not None else ("trained_policy" if inference_policy else "scripted_preview")),
+                    "demo_recording": demo_state["recording"],
+                    "demo_steps": len(demo_state["actions"]),
                     "checkpoint": checkpoint_id,
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),

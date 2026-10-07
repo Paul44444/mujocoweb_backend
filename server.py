@@ -115,6 +115,7 @@ ISAAC_VISION_FRAME_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "vision_frame.jpg
 ISAAC_METADATA_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "metadata.json")
 ISAAC_STATUS_PATH = os.path.join(ISAAC_OUTPUT_DIRECTORY, "status.json")
 ISAAC_CONTROL_DIRECTORY = os.path.join(ISAAC_OUTPUT_DIRECTORY, "commands")
+ISAAC_DEMO_DIRECTORY = Path(os.environ.get("ISAAC_DEMO_DIRECTORY", Path.home() / ".local/share/mujocoweb/demos"))
 frontend_origins = [
     origin.strip().rstrip("/")
     for origin in os.environ.get(
@@ -280,6 +281,25 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                         publish_command,
                         {"type": command_type, "assets": assets},
                     )
+                elif command_type in {"demo_start", "demo_stop", "demo_control"}:
+                    user = re.sub(r"[^A-Za-z0-9_-]", "-", str(command.get("user", "Guest")))[:32] or "Guest"
+                    name = re.sub(r"[^A-Za-z0-9 _.-]", "-", str(command.get("name", "Demo")))[:64] or "Demo"
+                    payload: dict[str, Any] = {"type": command_type, "user": user, "name": name}
+                    if command_type == "demo_control":
+                        movement = command.get("movement", [0, 0, 0])
+                        if not isinstance(movement, list) or len(movement) != 3:
+                            raise ValueError("Invalid demo movement")
+                        payload["movement"] = [max(-1.0, min(1.0, float(value))) for value in movement]
+                        payload["gripper"] = max(-1.0, min(1.0, float(command.get("gripper", 0))))
+                    await loop.run_in_executor(None, publish_command, payload)
+                elif command_type == "demo_play":
+                    demo_id = str(command.get("id", ""))
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_.-]{1,100}", demo_id):
+                        raise ValueError("Invalid demo id")
+                    demo_path = (ISAAC_DEMO_DIRECTORY / f"{demo_id}.npz").resolve()
+                    if ISAAC_DEMO_DIRECTORY.resolve() not in demo_path.parents or not demo_path.is_file():
+                        raise ValueError("Demo not found")
+                    await loop.run_in_executor(None, publish_command, {"type": "demo_play", "path": str(demo_path), "id": demo_id})
             except (KeyError, TypeError, ValueError, OSError):
                 pass
 
@@ -328,6 +348,22 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
             await receiver_task
         except asyncio.CancelledError:
             pass
+
+
+@app.get("/api/isaac/demos/{user}")
+def list_isaac_demos(user: str) -> Dict[str, Any]:
+    safe_user = re.sub(r"[^A-Za-z0-9_-]", "-", user)[:32] or "Guest"
+    user_directory = ISAAC_DEMO_DIRECTORY / safe_user
+    demos = []
+    if user_directory.is_dir():
+        for metadata_path in sorted(user_directory.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["id"] = f"{safe_user}/{metadata_path.stem}"
+                demos.append(metadata)
+            except (OSError, ValueError, TypeError):
+                continue
+    return {"user": safe_user, "demos": demos}
 
 
 class ObjectPrompt(BaseModel):
