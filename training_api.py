@@ -458,6 +458,47 @@ def stop_training(run_id: str) -> Dict[str, object]:
         return _run_payload(run_directory)
 
 
+@router.post("/runs/{run_id}/cancel")
+def cancel_training(run_id: str) -> Dict[str, object]:
+    """Terminate an active trainer while retaining metrics and checkpoints."""
+    if not RUN_ID_PATTERN.fullmatch(run_id):
+        raise HTTPException(status_code=400, detail="Invalid training run ID.")
+    run_directory = RUNS_DIRECTORY / run_id
+    if not run_directory.is_dir():
+        raise HTTPException(status_code=404, detail="Training run not found.")
+    with manager_lock:
+        payload = _run_payload(run_directory)
+        state = payload["status"].get("status")
+        if state not in {"starting", "training", "paused"}:
+            return payload
+        pid = int(_read_json(run_directory / "process.json", {}).get("pid", 0) or 0)
+        if pid and _is_alive(pid):
+            try:
+                # A SIGSTOP-paused process cannot handle SIGTERM until it is
+                # continued. The complete process group contains the wrapper
+                # and Isaac/RSL-RL child, but no playback process.
+                if state == "paused":
+                    os.killpg(pid, signal.SIGCONT)
+                os.killpg(pid, signal.SIGTERM)
+                deadline = time.monotonic() + 8.0
+                while _is_alive(pid) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if _is_alive(pid):
+                    os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                raise HTTPException(status_code=409, detail="Could not cancel the training process.") from exc
+        current = _read_json(run_directory / "status.json", {})
+        _write_json(run_directory / "status.json", {
+            **current,
+            "status": "cancelled",
+            "cancelled_at": time.time(),
+            "error": None,
+        })
+        return _run_payload(run_directory)
+
+
 @router.post("/runs/{run_id}/continue")
 def continue_training(run_id: str) -> Dict[str, object]:
     """Resume a SIGSTOP-paused trainer without replacing its state or metrics."""
