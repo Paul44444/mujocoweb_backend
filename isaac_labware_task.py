@@ -44,7 +44,10 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             prim_path="{ENV_REGEX_NS}/Object",
             init_state=RigidObjectCfg.InitialStateCfg(pos=(0.48, -0.16, 0.052), rot=(1.0, 0.0, 0.0, 0.0)),
             spawn=sim_utils.CylinderCfg(
-                radius=0.010,
+                # Keep the contact surface just inside the narrowest visible
+                # tube profile. A conservative collider is much more stable
+                # for grasping than a contact envelope wider than the mesh.
+                radius=0.0095,
                 height=0.10,
                 axis="Z",
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -57,7 +60,7 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
                     angular_damping=0.20,
                     disable_gravity=False,
                 ),
-                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.003, rest_offset=0.0),
+                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0005, rest_offset=0.0),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.018),
                 physics_material=RigidBodyMaterialCfg(static_friction=0.7, dynamic_friction=0.55),
                 visual_material=PreviewSurfaceCfg(diffuse_color=(0.25, 0.78, 0.92), opacity=0.0),

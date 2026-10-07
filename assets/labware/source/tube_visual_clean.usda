@@ -653,12 +653,6 @@ def Xform "test_tube_mutations" (
         }
     }
 
-    def PhysicsCollisionGroup "CollisionGroup" (
-    )
-    {
-        rel collection:colliders:includes = </test_tube_mutations/CollisionGroup>
-        rel physics:filteredGroups
-    }
 }
 
 def "Render" (
