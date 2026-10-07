@@ -64,7 +64,14 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
                 collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0005, rest_offset=0.0),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.018),
                 physics_material=RigidBodyMaterialCfg(static_friction=0.7, dynamic_friction=0.55),
-                visual_material=PreviewSurfaceCfg(diffuse_color=(0.25, 0.78, 0.92), opacity=0.0),
+                # Debug overlay: render the exact primitive used by PhysX in
+                # translucent red beneath the detailed tube mesh.
+                visual_material=PreviewSurfaceCfg(
+                    diffuse_color=(1.0, 0.05, 0.03),
+                    emissive_color=(0.18, 0.0, 0.0),
+                    opacity=0.38,
+                    roughness=0.28,
+                ),
             ),
         )
         self.scene.tube_visual = AssetBaseCfg(
