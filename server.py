@@ -366,6 +366,50 @@ def list_isaac_demos(user: str) -> Dict[str, Any]:
     return {"user": safe_user, "demos": demos}
 
 
+class DemoRename(BaseModel):
+    name: str
+
+
+def _isaac_demo_paths(user: str, demo: str) -> tuple[Path, Path]:
+    safe_user = re.sub(r"[^A-Za-z0-9_-]", "-", user)[:32] or "Guest"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", demo):
+        raise HTTPException(status_code=400, detail="Invalid demonstration id")
+    directory = ISAAC_DEMO_DIRECTORY / safe_user
+    return directory / f"{demo}.json", directory / f"{demo}.npz"
+
+
+@app.patch("/api/isaac/demos/{user}/{demo}")
+def rename_isaac_demo(user: str, demo: str, request: DemoRename) -> Dict[str, Any]:
+    metadata_path, _ = _isaac_demo_paths(user, demo)
+    if not metadata_path.is_file():
+        raise HTTPException(status_code=404, detail="Demonstration not found")
+    name = " ".join(request.name.strip().split())
+    if not 1 <= len(name) <= 64:
+        raise HTTPException(status_code=400, detail="Name must contain 1 to 64 characters")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["name"] = name
+        temporary_path = metadata_path.with_suffix(".json.next")
+        temporary_path.write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary_path, metadata_path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=500, detail="Could not rename demonstration") from exc
+    return {"id": f"{metadata_path.parent.name}/{metadata_path.stem}", **metadata}
+
+
+@app.delete("/api/isaac/demos/{user}/{demo}")
+def delete_isaac_demo(user: str, demo: str) -> Dict[str, Any]:
+    metadata_path, data_path = _isaac_demo_paths(user, demo)
+    if not metadata_path.is_file() and not data_path.is_file():
+        raise HTTPException(status_code=404, detail="Demonstration not found")
+    for path in (metadata_path, data_path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="Could not delete demonstration") from exc
+    return {"deleted": f"{metadata_path.parent.name}/{metadata_path.stem}"}
+
+
 class ObjectPrompt(BaseModel):
     description: str
 
