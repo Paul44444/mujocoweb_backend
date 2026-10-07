@@ -44,11 +44,12 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             prim_path="{ENV_REGEX_NS}/Object",
             init_state=RigidObjectCfg.InitialStateCfg(pos=(0.48, -0.16, 0.052), rot=(1.0, 0.0, 0.0, 0.0)),
             spawn=sim_utils.CylinderCfg(
-                # Keep the contact surface just inside the narrowest visible
-                # tube profile. A conservative collider is much more stable
-                # for grasping than a contact envelope wider than the mesh.
-                radius=0.0095,
-                height=0.10,
+                # Keep the collider several millimetres inside the rendered
+                # glass. The Franka fingertips have their own contact envelope;
+                # using the full visual diameter makes them appear to touch the
+                # tube while a visible gap is still present.
+                radius=0.0075,
+                height=0.092,
                 axis="Z",
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
