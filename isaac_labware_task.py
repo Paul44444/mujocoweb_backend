@@ -64,12 +64,12 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
                 collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.0005, rest_offset=0.0),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.018),
                 physics_material=RigidBodyMaterialCfg(static_friction=0.7, dynamic_friction=0.55),
-                # Debug overlay: render the exact primitive used by PhysX in
-                # bright red beneath the X-rayed detailed tube mesh.
+                # Collider inspection mode: show the exact PhysX primitive as
+                # a fully opaque red cylinder. Alpha-blended nested surfaces
+                # are unreliable in the headless RTX renderer.
                 visual_material=PreviewSurfaceCfg(
                     diffuse_color=(1.0, 0.01, 0.01),
                     emissive_color=(0.55, 0.0, 0.0),
-                    opacity=0.92,
                     roughness=0.28,
                 ),
             ),
@@ -81,11 +81,8 @@ class FrankaLabwarePlacementEnvCfg(FrankaCubeLiftEnvCfg):
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
             spawn=sim_utils.UsdFileCfg(
                 usd_path=str(LABWARE_ASSET_DIR / "test_tube.usda"),
-                visual_material=PreviewSurfaceCfg(
-                    # X-ray the detailed mesh so the inset red collider is
-                    # visible instead of being occluded by the tube surface.
-                    diffuse_color=(0.08, 0.72, 0.95), emissive_color=(0.02, 0.12, 0.18), opacity=0.12, roughness=0.24
-                ),
+                # Hide the detailed mesh while inspecting the collision body.
+                visible=False,
             ),
         )
 
