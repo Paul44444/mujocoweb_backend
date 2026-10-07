@@ -388,6 +388,22 @@ try:
         device=env.unwrapped.device,
     )
     teleop_target_pose_b = torch.zeros((1, 7), dtype=torch.float32, device=env.unwrapped.device)
+    normal_arm_stiffness = robot.data.joint_stiffness[:, :7].clone()
+    normal_arm_damping = robot.data.joint_damping[:, :7].clone()
+    robot_prim_path = robot.root_physx_view.prim_paths[0]
+
+    def set_teleop_drive_gains(enabled: bool) -> None:
+        """Use Isaac's recommended stiff Franka gains only for task-space teleoperation."""
+        if enabled:
+            robot.write_joint_stiffness_to_sim(400.0, joint_ids=list(range(7)))
+            robot.write_joint_damping_to_sim(80.0, joint_ids=list(range(7)))
+        else:
+            robot.write_joint_stiffness_to_sim(normal_arm_stiffness, joint_ids=list(range(7)))
+            robot.write_joint_damping_to_sim(normal_arm_damping, joint_ids=list(range(7)))
+        sim_utils.modify_rigid_body_properties(
+            robot_prim_path,
+            sim_utils.RigidBodyPropertiesCfg(disable_gravity=enabled),
+        )
 
     def reset_teleop_target() -> None:
         root_pose_w = robot.data.root_pose_w[:1]
@@ -509,6 +525,7 @@ try:
                         flush=True,
                     )
                 elif command_type == "policy_load":
+                    set_teleop_drive_gains(False)
                     requested_path = Path(str(command["path"])).resolve()
                     if not requested_path.is_file():
                         raise FileNotFoundError(f"Policy checkpoint not found: {requested_path}")
@@ -528,6 +545,7 @@ try:
                         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],
                         "ee_positions": [], "object_positions": [], "playback": None, "playback_index": 0})
                     reset_teleop_target()
+                    set_teleop_drive_gains(True)
                     # Human teleoperation must not race the six-second RL
                     # horizon. Keep physical failure terminations active, but
                     # move the timeout far beyond any practical demo length.
@@ -541,12 +559,14 @@ try:
                             demo_state["gripper"] = float(command["gripper"])
                 elif command_type == "demo_stop":
                     save_demo()
+                    set_teleop_drive_gains(False)
                     env.unwrapped.cfg.episode_length_s = demo_state["normal_episode_length_s"]
                     demo_state["active"] = False
                     demo_state["recording"] = False
                     demo_state["movement"] = np.zeros(3, dtype=np.float32)
                     print("Stopped web demonstration recording", flush=True)
                 elif command_type == "demo_play":
+                    set_teleop_drive_gains(False)
                     payload = np.load(command["path"])
                     demo_state["playback"] = np.asarray(payload["actions"], dtype=np.float32)
                     demo_state["playback_index"] = 0
