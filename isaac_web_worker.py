@@ -659,6 +659,7 @@ try:
                     demo_state["playback_last_action"] = playback[-1:].copy() if len(playback) else None
                     demo_state["active"] = False
                     demo_state["recording"] = False
+                    simulation_paused = False
                     reset = env.reset()
                     freeze_demo_task_target()
                     policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
@@ -820,6 +821,8 @@ try:
                     "mode": "demo_recording" if demo_state["recording"] else ("demo_playback" if demo_state["playback"] is not None else ("trained_policy" if inference_policy else "scripted_preview")),
                     "demo_recording": demo_state["recording"],
                     "demo_steps": len(demo_state["actions"]),
+                    "demo_playback_step": int(demo_state["playback_index"]) if demo_state["playback"] is not None else None,
+                    "demo_playback_steps": len(demo_state["playback"]) if demo_state["playback"] is not None else None,
                     "checkpoint": checkpoint_id,
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
