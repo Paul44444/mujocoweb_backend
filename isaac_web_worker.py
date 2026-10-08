@@ -119,6 +119,15 @@ def load_actor(checkpoint: Path) -> torch.nn.Module:
             layers.append(torch.nn.ELU())
     actor = torch.nn.Sequential(*layers)
     actor.load_state_dict(actor_state)
+    actor.web_demo_control = bool((payload.get("infos") or {}).get("demo_control", False))
+    if (payload.get("infos") or {}).get("demo_duration"):
+        duration = float(payload["infos"]["demo_duration"])
+        def mask_previous_action(module, inputs):
+            observations = inputs[0].clone()
+            observations[:, -8:] = 0.0
+            observations[:, -8] = min(1.0, globals().get("step", 0) * 0.02 / duration)
+            return (observations,)
+        actor.register_forward_pre_hook(mask_previous_action)
     actor.eval()
     return actor
 
@@ -423,11 +432,14 @@ try:
         teleop_ik.set_command(teleop_target_pose_b)
 
     reset_teleop_target()
+    if inference_policy is not None:
+        set_teleop_drive_gains(bool(getattr(inference_policy, "web_demo_control", False)))
 
     def capture_demo_initial_state() -> dict[str, np.ndarray]:
         """Capture enough simulator state to replay a demo from its exact start pose."""
         object_asset = env.unwrapped.scene["object"]
         initial_state = {
+            "initial_previous_action": env.unwrapped.action_manager.action[0].detach().cpu().numpy().copy(),
             "initial_robot_joint_pos": robot.data.joint_pos[0].detach().cpu().numpy().copy(),
             "initial_robot_joint_vel": robot.data.joint_vel[0].detach().cpu().numpy().copy(),
             "initial_robot_root_pose": robot.data.root_pose_w[0].detach().cpu().numpy().copy(),
@@ -464,12 +476,16 @@ try:
         )
         object_asset.write_root_pose_to_sim(tensor("initial_object_root_pose"))
         object_asset.write_root_velocity_to_sim(tensor("initial_object_root_velocity"))
+        if "initial_previous_action" in initial_state:
+            env.unwrapped.action_manager.action.copy_(tensor("initial_previous_action"))
+            env.unwrapped.action_manager.prev_action.copy_(tensor("initial_previous_action"))
         if "initial_task_target_pose" in initial_state:
             command_term = env.unwrapped.command_manager.get_term("object_pose")
             command_term.command.copy_(tensor("initial_task_target_pose"))
             freeze_demo_task_target()
             env.unwrapped.command_manager.compute(dt=0.0)
         env.unwrapped.episode_length_buf.zero_()
+        env.unwrapped.sim.forward()
         env.unwrapped.scene.update(dt=0.0)
 
     def save_demo() -> None:
@@ -586,7 +602,7 @@ try:
                     else:
                         demo_state["playback"] = None
                         demo_state["playback_last_action"] = None
-                        set_teleop_drive_gains(False)
+                        set_teleop_drive_gains(bool(getattr(inference_policy, "web_demo_control", False)))
                         reset = env.reset()
                         policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
                         step = 0
@@ -598,6 +614,7 @@ try:
                     if not requested_path.is_file():
                         raise FileNotFoundError(f"Policy checkpoint not found: {requested_path}")
                     inference_policy = load_actor(requested_path)
+                    set_teleop_drive_gains(bool(getattr(inference_policy, "web_demo_control", False)))
                     checkpoint_path = requested_path
                     checkpoint_id = str(command["id"])
                     atomic_json(status_path, {
@@ -627,6 +644,12 @@ try:
                             initial_state["initial_task_target_pose"] = np.asarray(
                                 payload["initial_task_target_pose"], dtype=np.float32
                             ).copy()
+                        # Legacy v3 demos already store this observation field:
+                        # the final eight values are Isaac's previous action.
+                        initial_state["initial_previous_action"] = np.asarray(
+                            payload["initial_previous_action"] if "initial_previous_action" in payload.files
+                            else payload["observations"][0, -8:], dtype=np.float32
+                        ).copy()
                     variation = max(0.0, min(0.15, float(command.get("position_variation", 0.0))))
                     offset = np.zeros(3, dtype=np.float32)
                     if variation > 0.0:
@@ -636,7 +659,7 @@ try:
                     demo_state["playback_last_action"] = None
                     demo_state["active"] = False
                     demo_state["recording"] = False
-                    set_teleop_drive_gains(False)
+                    set_teleop_drive_gains(True)
                     reset = env.reset()
                     policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
                     restore_demo_initial_state(initial_state)
@@ -697,6 +720,11 @@ try:
                         if initial_state is not None and "initial_task_target_pose" in payload.files:
                             initial_state["initial_task_target_pose"] = np.asarray(
                                 payload["initial_task_target_pose"], dtype=np.float32
+                            ).copy()
+                        if initial_state is not None:
+                            initial_state["initial_previous_action"] = np.asarray(
+                                payload["initial_previous_action"] if "initial_previous_action" in payload.files
+                                else payload["observations"][0, -8:], dtype=np.float32
                             ).copy()
                     set_teleop_drive_gains(True)
                     env.unwrapped.cfg.episode_length_s = 24.0 * 60.0 * 60.0

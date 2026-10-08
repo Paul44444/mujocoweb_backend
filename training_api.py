@@ -35,7 +35,7 @@ ISAAC_DESKTOP_STATUS = ISAAC_DESKTOP_DIRECTORY / "launcher-status.json"
 ISAACLAB_PYTHON = Path(os.environ.get("ISAACLAB_PYTHON", "/home/paul/miniconda3/envs/env_isaaclab1/bin/python"))
 ISAAC_WEB_WORKER = ROOT / "isaac_web_worker.py"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
-CHECKPOINT_PATTERN = re.compile(r"^model_\d+\.pt$")
+CHECKPOINT_PATTERN = re.compile(r"^model_(?:\d+|bc)\.pt$")
 router = APIRouter(prefix="/api/training", tags=["training"])
 manager_lock = threading.Lock()
 
@@ -149,14 +149,14 @@ def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, obj
             continue
         for path in sorted(
             (run_directory / "checkpoints").glob("model_*.pt"),
-            key=lambda item: int(item.stem.split("_")[-1]),
+            key=lambda item: -1 if item.stem == "model_bc" else int(item.stem.split("_")[-1]),
             reverse=True,
         ):
             checkpoints.append({
                 "id": f"{run_directory.name}/{path.name}",
                 "run_id": run_directory.name,
                 "name": path.name,
-                "label": f"{_run_display_name(run_directory, config)} · {path.name}",
+                "label": f"{_run_display_name(run_directory, config)} · {path.name}" + (" · Imitation only" if path.stem == "model_bc" else ""),
                 "modified_at": path.stat().st_mtime,
                 "deletable": True,
                 "isaac_task": run_task,
@@ -245,6 +245,7 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
         "config": config,
         "metrics": _sample_metrics(metrics),
         "bc_metrics": _sample_metrics(bc_metrics),
+        "bc_validation": _read_json(run_directory / "bc_rollout_validation.json", {}),
         "checkpoints": [path.name for path in checkpoints],
     }
 

@@ -68,11 +68,18 @@ def sync_checkpoints(output_directory: Path | None, destination: Path) -> list[s
     if output_directory is None:
         return []
     destination.mkdir(parents=True, exist_ok=True)
+    for name in ("bc_rollout_validation.json", "demo_replay_validation.json"):
+        validation = output_directory / name
+        if validation.is_file():
+            shutil.copy2(validation, destination.parent / name)
     for source in output_directory.glob("model_*.pt"):
         target = destination / source.name
         if not target.exists() or target.stat().st_mtime_ns != source.stat().st_mtime_ns:
             shutil.copy2(source, target)
-    return sorted(path.name for path in destination.glob("model_*.pt"))
+    return sorted(
+        (path.name for path in destination.glob("model_*.pt")),
+        key=lambda name: -1 if name == "model_bc.pt" else int(name.removeprefix("model_").removesuffix(".pt")),
+    )
 
 
 def number(line: str, label: str) -> float | None:

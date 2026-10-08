@@ -32,12 +32,17 @@ source = source.replace(
             demonstration_paths,
             int(os.environ.get(\"ISAAC_BC_EPOCHS\", \"200\")),
         )
+        runner.web_demo_control = True
         torch.save({
             \"model_state_dict\": runner.alg.policy.state_dict(),
             \"optimizer_state_dict\": runner.alg.optimizer.state_dict(),
             \"iter\": 0,
-            \"infos\": {\"phase\": \"behavior_cloning\"},
-        }, os.path.join(log_dir, \"model_0.pt\"))
+            \"infos\": {\"phase\": \"behavior_cloning\", \"demo_control\": True, \"demo_duration\": env_cfg.episode_length_s},
+        }, os.path.join(log_dir, \"model_bc.pt\"))
+        original_save = runner.save
+        def save_with_demo_control(path, infos=None):
+            original_save(path, infos={**(infos or {}), \"demo_control\": True, \"demo_duration\": env_cfg.episode_length_s})
+        runner.save = save_with_demo_control
 
 """ + training_marker,
     1,
@@ -55,6 +60,18 @@ source = source.replace(
             float(env_cfg.sim.dt) * int(env_cfg.decimation),
         )
         env_cfg.episode_length_s = max(float(env_cfg.episode_length_s), demo_episode_seconds)
+        # Match the controller used to collect web demonstrations.
+        env_cfg.scene.robot.actuators[\"panda_shoulder\"].stiffness = 400.0
+        env_cfg.scene.robot.actuators[\"panda_shoulder\"].damping = 80.0
+        env_cfg.scene.robot.actuators[\"panda_forearm\"].stiffness = 400.0
+        env_cfg.scene.robot.actuators[\"panda_forearm\"].damping = 80.0
+        env_cfg.scene.robot.spawn.rigid_props.disable_gravity = True
+        agent_cfg.clip_actions = None
+        env_cfg.observations.policy.enable_corruption = False
+        from isaac_demo_bc import demonstration_phase
+        env_cfg.observations.policy.actions.func = demonstration_phase
+        env_cfg.observations.policy.actions.params = {\"duration\": demo_episode_seconds}
+        env_cfg.observations.policy.actions.scale = None
         print(
             f\"Demo-aware PPO episode length: {env_cfg.episode_length_s:.2f}s \"
             f\"(longest demonstration: {demo_episode_seconds:.2f}s)\",
