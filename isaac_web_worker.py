@@ -646,7 +646,7 @@ try:
                     # Present the restored state before the policy takes its
                     # first action. The normal Start simulation button resumes
                     # from this exact pose.
-                    simulation_paused = True
+                    simulation_paused = bool(command.get("pause_after_load", True))
                     step = 0
                     episode += 1
                     print(

@@ -308,11 +308,15 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                     if ISAAC_DEMO_DIRECTORY.resolve() not in demo_path.parents or not demo_path.is_file():
                         raise ValueError("Demo not found")
                     variation = max(0.0, min(0.15, float(command.get("position_variation", 0.0))))
+                    pause_after_load = command.get("pause_after_load", True)
+                    if type(pause_after_load) is not bool:
+                        raise ValueError("Invalid evaluation pause state")
                     await loop.run_in_executor(None, publish_command, {
                         "type": "policy_evaluate",
                         "path": str(demo_path),
                         "id": demo_id,
                         "position_variation": variation,
+                        "pause_after_load": pause_after_load,
                     })
             except (KeyError, TypeError, ValueError, OSError):
                 pass
