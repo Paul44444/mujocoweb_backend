@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+
+
+def longest_demonstration_seconds(demonstration_paths: list[str], fallback_step_dt: float) -> float:
+    """Return the longest recorded demo duration, preferring its saved metadata."""
+    longest = 0.0
+    for raw_path in demonstration_paths:
+        path = Path(raw_path)
+        try:
+            metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+            duration = float(metadata.get("duration", 0.0))
+        except (OSError, ValueError, TypeError):
+            with np.load(path) as payload:
+                duration = len(payload["actions"]) * fallback_step_dt
+        longest = max(longest, duration)
+    return longest
 
 
 def pretrain_runner_from_demonstrations(

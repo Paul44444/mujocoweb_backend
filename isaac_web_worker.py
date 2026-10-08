@@ -140,6 +140,10 @@ try:
         effective_task = "Isaac-Lift-Cube-Franka-Play-v0" if checkpoint_id else args.task
     env_cfg = parse_env_cfg(effective_task, device=args.device, num_envs=1)
     env_cfg.seed = 42
+    # The public viewer is an interactive session, not a fixed-horizon RL
+    # rollout. It ends only through an explicit reset (apart from physical
+    # failure terminations such as dropping the task object).
+    env_cfg.episode_length_s = 24.0 * 60.0 * 60.0
     if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "object_pose"):
         env_cfg.commands.object_pose.debug_vis = False
     env_cfg.scene.web_camera = CameraCfg(
@@ -527,7 +531,7 @@ try:
         return action
 
     def apply_camera_commands() -> None:
-        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused
+        global inference_policy, policy_observations, checkpoint_id, checkpoint_path, simulation_paused, step, episode
         camera_changed = False
         for command_path in sorted(control_directory.glob("*.json")):
             try:
@@ -576,6 +580,18 @@ try:
                         "Isaac web simulation paused" if simulation_paused else "Isaac web simulation resumed",
                         flush=True,
                     )
+                elif command_type == "reset_episode":
+                    if demo_state["recording"]:
+                        print("Ignoring episode reset while a demonstration is recording", flush=True)
+                    else:
+                        demo_state["playback"] = None
+                        demo_state["playback_last_action"] = None
+                        set_teleop_drive_gains(False)
+                        reset = env.reset()
+                        policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
+                        step = 0
+                        episode += 1
+                        print("Isaac web episode reset manually", flush=True)
                 elif command_type == "policy_load":
                     set_teleop_drive_gains(False)
                     requested_path = Path(str(command["path"])).resolve()

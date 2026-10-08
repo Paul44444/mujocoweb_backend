@@ -236,9 +236,9 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
 
             command_type = command.get("type")
             try:
-                if command_type == "camera_reset":
+                if command_type in {"camera_reset", "reset_episode"}:
                     await loop.run_in_executor(
-                        None, publish_command, {"type": "camera_reset"}
+                        None, publish_command, {"type": command_type}
                     )
                 elif command_type in {"camera_orbit", "camera_pan"}:
                     await loop.run_in_executor(

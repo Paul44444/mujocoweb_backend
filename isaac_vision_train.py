@@ -42,5 +42,27 @@ source = source.replace(
 """ + training_marker,
     1,
 )
+environment_marker = "    # create isaac environment"
+if environment_marker not in source:
+    raise RuntimeError("Isaac Lab train.py environment marker changed")
+source = source.replace(
+    environment_marker,
+    """    demonstration_paths = json.loads(os.environ.get(\"ISAAC_DEMO_PATHS\", \"[]\"))
+    if demonstration_paths:
+        from isaac_demo_bc import longest_demonstration_seconds
+        demo_episode_seconds = longest_demonstration_seconds(
+            demonstration_paths,
+            float(env_cfg.sim.dt) * int(env_cfg.decimation),
+        )
+        env_cfg.episode_length_s = max(float(env_cfg.episode_length_s), demo_episode_seconds)
+        print(
+            f\"Demo-aware PPO episode length: {env_cfg.episode_length_s:.2f}s \"
+            f\"(longest demonstration: {demo_episode_seconds:.2f}s)\",
+            flush=True,
+        )
+
+""" + environment_marker,
+    1,
+)
 namespace = {"__name__": "__main__", "__file__": str(script)}
 exec(compile(source, str(script), "exec"), namespace)
