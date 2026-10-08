@@ -29,6 +29,7 @@ ISAAC_STATUS_PATH = ISAAC_OUTPUT_DIRECTORY / "status.json"
 ISAAC_FRAME_PATH = ISAAC_OUTPUT_DIRECTORY / "frame.jpg"
 ISAAC_METADATA_PATH = ISAAC_OUTPUT_DIRECTORY / "metadata.json"
 ISAAC_CONTROL_DIRECTORY = ISAAC_OUTPUT_DIRECTORY / "commands"
+ISAAC_DEMO_DIRECTORY = Path(os.environ.get("ISAAC_DEMO_DIRECTORY", Path.home() / ".local/share/mujocoweb/demos"))
 ISAAC_DESKTOP_DIRECTORY = Path("/tmp/mujocoweb-isaac-desktop")
 ISAAC_DESKTOP_STATUS = ISAAC_DESKTOP_DIRECTORY / "launcher-status.json"
 ISAACLAB_PYTHON = Path(os.environ.get("ISAACLAB_PYTHON", "/home/paul/miniconda3/envs/env_isaaclab1/bin/python"))
@@ -50,6 +51,8 @@ class StartTrainingRequest(BaseModel):
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
     isaac_task: Literal["state", "vision", "labware_lift", "labware"] = "state"
+    demo_ids: List[str] = Field(default_factory=list, max_length=8)
+    bc_epochs: int = Field(default=200, ge=1, le=2000)
 
 
 class SelectIsaacTaskRequest(BaseModel):
@@ -97,6 +100,26 @@ def _checkpoint_path(checkpoint_id: str) -> Path:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Checkpoint not found.")
     return path.resolve()
+
+
+def _demonstration_path(demo_id: str, user: str, isaac_task: str) -> Path:
+    demo_user, separator, demo_name = demo_id.partition("/")
+    if (
+        not separator
+        or demo_user != user
+        or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", demo_name)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid demonstration ID.")
+    path = (ISAAC_DEMO_DIRECTORY / demo_user / f"{demo_name}.npz").resolve()
+    if ISAAC_DEMO_DIRECTORY.resolve() not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Demonstration {demo_id} was not found.")
+    metadata = _read_json(path.with_suffix(".json"), {})
+    if metadata.get("task") != isaac_task:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Demonstration {demo_id} belongs to task {metadata.get('task', 'unknown')}, not {isaac_task}.",
+        )
+    return path
 
 
 def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
@@ -397,6 +420,13 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
     with manager_lock:
         if request.engine == "mujoco" and request.iterations > 25:
             raise HTTPException(status_code=422, detail="MuJoCo web training is limited to 25 iterations per run.")
+        user = re.sub(r"[^A-Za-z0-9_-]", "-", request.user).strip("-")[:32] or "Guest"
+        if request.demo_ids and request.engine != "isaaclab":
+            raise HTTPException(status_code=422, detail="Demonstration warm-start currently supports Isaac Lab only.")
+        demo_paths = [
+            _demonstration_path(demo_id, user, request.isaac_task)
+            for demo_id in request.demo_ids
+        ]
         resume_path = None
         if request.resume_checkpoint:
             if request.engine != "isaaclab":
@@ -415,7 +445,6 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
         if active:
             raise HTTPException(status_code=409, detail=f"Training run {active['id']} is already active.")
         RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        user = re.sub(r"[^A-Za-z0-9_-]", "-", request.user).strip("-")[:32] or "Guest"
         default_name = "Isaac training" if request.engine == "isaaclab" else "MuJoCo training"
         display_name = (request.name or "").strip()[:48] or f"{default_name} {time.strftime('%Y-%m-%d %H:%M')}"
         name_slug = re.sub(r"[^A-Za-z0-9_-]", "-", display_name).strip("-")[:28] or "training"
@@ -434,6 +463,8 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
             }),
             "resume_checkpoint": request.resume_checkpoint,
             "isaac_task": request.isaac_task if request.engine == "isaaclab" else None,
+            "demo_ids": request.demo_ids,
+            "bc_epochs": request.bc_epochs if request.demo_ids else 0,
         }
         (run_directory / "config.json").write_text(json.dumps(initial_config), encoding="utf-8")
         (run_directory / "status.json").write_text(
@@ -451,6 +482,10 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
         ]
         if request.engine == "isaaclab":
             command.extend(["--num-envs", str(request.num_envs), "--isaac-task", request.isaac_task])
+            if demo_paths:
+                command.extend(["--bc-epochs", str(request.bc_epochs)])
+                for demo_path in demo_paths:
+                    command.extend(["--demo-path", str(demo_path)])
             if resume_path:
                 command.extend([
                     "--resume-checkpoint", str(resume_path),

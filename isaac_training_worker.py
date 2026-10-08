@@ -90,10 +90,12 @@ def main() -> None:
     parser.add_argument("--isaac-task", choices=("state", "vision", "labware_lift", "labware"), default="state")
     parser.add_argument("--resume-checkpoint")
     parser.add_argument("--resume-checkpoint-id")
+    parser.add_argument("--demo-path", action="append", default=[])
+    parser.add_argument("--bc-epochs", type=int, default=200)
     args = parser.parse_args()
     task = TASKS[args.isaac_task]
     experiment = EXPERIMENTS[args.isaac_task]
-    train_script = VISION_TRAIN_SCRIPT if args.isaac_task in {"vision", "labware_lift", "labware"} else TRAIN_SCRIPT
+    train_script = VISION_TRAIN_SCRIPT if args.demo_path or args.isaac_task in {"vision", "labware_lift", "labware"} else TRAIN_SCRIPT
 
     run_directory = Path(args.run_directory).resolve()
     run_directory.mkdir(parents=True, exist_ok=True)
@@ -116,6 +118,8 @@ def main() -> None:
         "num_envs": args.num_envs,
         "seed": args.seed,
         "resume_checkpoint": args.resume_checkpoint_id,
+        "demonstrations": len(args.demo_path),
+        "bc_epochs": args.bc_epochs if args.demo_path else 0,
     }
     atomic_json(run_directory / "config.json", config)
     atomic_json(metrics_path, {"metrics": []})
@@ -195,6 +199,9 @@ def main() -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = f"{ROOT}:{environment.get('PYTHONPATH', '')}"
         environment["PYTHONUNBUFFERED"] = "1"
+        if args.demo_path:
+            environment["ISAAC_DEMO_PATHS"] = json.dumps(args.demo_path)
+            environment["ISAAC_BC_EPOCHS"] = str(args.bc_epochs)
         # run-local.sh deliberately leaves this empty for the MuJoCo process.
         # An empty CUDA_VISIBLE_DEVICES hides every GPU from the child process.
         if not environment.get("CUDA_VISIBLE_DEVICES", "").strip():
@@ -214,6 +221,18 @@ def main() -> None:
         for raw_line in child.stdout:
             print(raw_line, end="", flush=True)
             line = ANSI_ESCAPE.sub("", raw_line).strip()
+            bc_match = re.search(r"BC epoch\s+(\d+)\s*/\s*(\d+)\s+loss:\s*([-+0-9.eE]+)", line)
+            if bc_match:
+                atomic_json(status_path, {
+                    "status": "training",
+                    "phase": "behavior_cloning",
+                    "started_at": started_at,
+                    "iteration": 0,
+                    "bc_epoch": int(bc_match.group(1)),
+                    "bc_epochs": int(bc_match.group(2)),
+                    "bc_loss": float(bc_match.group(3)),
+                    "pid": child.pid,
+                })
             if any(marker in line for marker in (
                 "No CUDA GPUs are available",
                 "no CUDA-capable device is detected",
