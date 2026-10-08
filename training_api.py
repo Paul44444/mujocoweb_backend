@@ -205,7 +205,22 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
     status = _read_json(run_directory / "status.json", {"status": "unknown", "iteration": 0})
     config = _read_json(run_directory / "config.json", {})
     config = {**config, "name": _run_display_name(run_directory, config)}
-    metrics = _read_json(run_directory / "metrics.json", {"metrics": []}).get("metrics", [])
+    metrics_payload = _read_json(run_directory / "metrics.json", {"metrics": [], "bc_metrics": []})
+    metrics = metrics_payload.get("metrics", [])
+    bc_metrics = metrics_payload.get("bc_metrics", [])
+    # Runs created before BC history was persisted still contain the progress
+    # lines in their log. Recover those points so the dashboard can plot them.
+    if not bc_metrics:
+        try:
+            log_text = (run_directory / "training.log").read_text(encoding="utf-8", errors="replace")
+            bc_metrics = [
+                {"epoch": int(epoch), "loss": float(loss)}
+                for epoch, _total, loss in re.findall(
+                    r"BC epoch\s+(\d+)\s*/\s*(\d+)\s+loss:\s*([-+0-9.eE]+)", log_text
+                )
+            ]
+        except OSError:
+            bc_metrics = []
     pid_data = _read_json(run_directory / "process.json", {})
     pid = int(pid_data.get("pid", 0) or 0)
     if status.get("status") in {"starting", "training", "paused"} and pid and not _is_alive(pid):
@@ -229,6 +244,7 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
         "status": status,
         "config": config,
         "metrics": _sample_metrics(metrics),
+        "bc_metrics": _sample_metrics(bc_metrics),
         "checkpoints": [path.name for path in checkpoints],
     }
 

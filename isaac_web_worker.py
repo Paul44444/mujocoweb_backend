@@ -608,6 +608,49 @@ try:
                         "hot_swapped_at": time.time(),
                     })
                     print(f"Hot-swapped Isaac web policy to {checkpoint_id}", flush=True)
+                elif command_type == "policy_evaluate":
+                    if inference_policy is None:
+                        raise RuntimeError("Load a trained policy before starting demonstration evaluation")
+                    with np.load(command["path"]) as payload:
+                        state_keys = (
+                            "initial_robot_joint_pos", "initial_robot_joint_vel",
+                            "initial_robot_root_pose", "initial_robot_root_velocity",
+                            "initial_object_root_pose", "initial_object_root_velocity",
+                        )
+                        if not all(key in payload.files for key in state_keys):
+                            raise ValueError("This legacy demonstration has no recorded initial state")
+                        initial_state = {
+                            key: np.asarray(payload[key], dtype=np.float32).copy()
+                            for key in state_keys
+                        }
+                        if "initial_task_target_pose" in payload.files:
+                            initial_state["initial_task_target_pose"] = np.asarray(
+                                payload["initial_task_target_pose"], dtype=np.float32
+                            ).copy()
+                    variation = max(0.0, min(0.15, float(command.get("position_variation", 0.0))))
+                    offset = np.zeros(3, dtype=np.float32)
+                    if variation > 0.0:
+                        offset[:2] = np.random.uniform(-variation, variation, size=2)
+                        initial_state["initial_object_root_pose"][:2] += offset[:2]
+                    demo_state["playback"] = None
+                    demo_state["playback_last_action"] = None
+                    demo_state["active"] = False
+                    demo_state["recording"] = False
+                    set_teleop_drive_gains(False)
+                    reset = env.reset()
+                    policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
+                    restore_demo_initial_state(initial_state)
+                    observations = env.unwrapped.observation_manager.compute(update_history=True)
+                    policy_observations = observations.get("policy") if isinstance(observations, dict) else observations
+                    policy_observations = apply_vision_estimate(policy_observations)
+                    simulation_paused = False
+                    step = 0
+                    episode += 1
+                    print(
+                        f"Evaluating policy from demo {command['id']} with object XY offset "
+                        f"({offset[0]:+.4f}, {offset[1]:+.4f}) m",
+                        flush=True,
+                    )
                 elif command_type == "demo_start":
                     demo_state.update({"active": True, "recording": True, "name": command["name"], "user": command["user"],
                         "movement": np.zeros(3, dtype=np.float32), "gripper": 1.0, "observations": [], "actions": [],

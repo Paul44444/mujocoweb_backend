@@ -300,6 +300,20 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                     if ISAAC_DEMO_DIRECTORY.resolve() not in demo_path.parents or not demo_path.is_file():
                         raise ValueError("Demo not found")
                     await loop.run_in_executor(None, publish_command, {"type": "demo_play", "path": str(demo_path), "id": demo_id})
+                elif command_type == "policy_evaluate":
+                    demo_id = str(command.get("id", ""))
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_.-]{1,100}", demo_id):
+                        raise ValueError("Invalid demo id")
+                    demo_path = (ISAAC_DEMO_DIRECTORY / f"{demo_id}.npz").resolve()
+                    if ISAAC_DEMO_DIRECTORY.resolve() not in demo_path.parents or not demo_path.is_file():
+                        raise ValueError("Demo not found")
+                    variation = max(0.0, min(0.15, float(command.get("position_variation", 0.0))))
+                    await loop.run_in_executor(None, publish_command, {
+                        "type": "policy_evaluate",
+                        "path": str(demo_path),
+                        "id": demo_id,
+                        "position_variation": variation,
+                    })
             except (KeyError, TypeError, ValueError, OSError):
                 pass
 

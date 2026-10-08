@@ -122,7 +122,8 @@ def main() -> None:
         "bc_epochs": args.bc_epochs if args.demo_path else 0,
     }
     atomic_json(run_directory / "config.json", config)
-    atomic_json(metrics_path, {"metrics": []})
+    bc_metrics: list[dict] = []
+    atomic_json(metrics_path, {"metrics": [], "bc_metrics": bc_metrics})
     atomic_json(status_path, {"status": "starting", "started_at": started_at, "iteration": 0})
     signal.signal(signal.SIGTERM, stop_worker)
     signal.signal(signal.SIGINT, stop_worker)
@@ -158,7 +159,7 @@ def main() -> None:
             metrics[-1] = metric
         else:
             metrics.append(metric)
-        atomic_json(metrics_path, {"metrics": metrics})
+        atomic_json(metrics_path, {"metrics": metrics, "bc_metrics": bc_metrics})
         output_directory = output_directory or find_output_directory(run_name, experiment)
         checkpoint_names = sync_checkpoints(output_directory, checkpoints_directory)
         atomic_json(status_path, {
@@ -223,6 +224,15 @@ def main() -> None:
             line = ANSI_ESCAPE.sub("", raw_line).strip()
             bc_match = re.search(r"BC epoch\s+(\d+)\s*/\s*(\d+)\s+loss:\s*([-+0-9.eE]+)", line)
             if bc_match:
+                bc_metric = {
+                    "epoch": int(bc_match.group(1)),
+                    "loss": float(bc_match.group(3)),
+                }
+                if bc_metrics and bc_metrics[-1]["epoch"] == bc_metric["epoch"]:
+                    bc_metrics[-1] = bc_metric
+                else:
+                    bc_metrics.append(bc_metric)
+                atomic_json(metrics_path, {"metrics": metrics, "bc_metrics": bc_metrics})
                 atomic_json(status_path, {
                     "status": "training",
                     "phase": "behavior_cloning",
