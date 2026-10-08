@@ -643,7 +643,10 @@ try:
                     observations = env.unwrapped.observation_manager.compute(update_history=True)
                     policy_observations = observations.get("policy") if isinstance(observations, dict) else observations
                     policy_observations = apply_vision_estimate(policy_observations)
-                    simulation_paused = False
+                    # Present the restored state before the policy takes its
+                    # first action. The normal Start simulation button resumes
+                    # from this exact pose.
+                    simulation_paused = True
                     step = 0
                     episode += 1
                     print(
