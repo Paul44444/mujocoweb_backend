@@ -78,7 +78,9 @@ def sync_checkpoints(output_directory: Path | None, destination: Path) -> list[s
             shutil.copy2(source, target)
     return sorted(
         (path.name for path in destination.glob("model_*.pt")),
-        key=lambda name: -1 if name == "model_bc.pt" else int(name.removeprefix("model_").removesuffix(".pt")),
+        # The supervisor runs under Python 3.8 (str.removeprefix/removesuffix
+        # only exist in 3.9+). Keep BC first and PPO checkpoints numeric.
+        key=lambda name: -1 if name == "model_bc.pt" else int(name[len("model_"):-len(".pt")]),
     )
 
 
