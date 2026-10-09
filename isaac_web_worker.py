@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -51,6 +51,7 @@ import isaaclab.utils.math as math_utils
 import isaaclab_tasks  # noqa: F401
 import isaac_vision_task
 import isaac_labware_task  # noqa: F401
+import isaac_rack_insert_task  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 
@@ -70,7 +71,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -147,6 +148,8 @@ try:
     elif task_mode == "graspgen":
         import isaac_graspgen_task
         effective_task = "Isaac-Franka-GraspGenX-Tube-Pick-Play-v0"
+    elif task_mode == "rack_insert":
+        effective_task = "Isaac-Franka-Upright-Tube-Rack-Insert-Play-v0"
     elif task_mode == "labware_lift":
         effective_task = "Isaac-Franka-Test-Tube-Lift-Play-v0"
     elif task_mode == "labware":
@@ -207,6 +210,7 @@ try:
         "labware_lift": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "graspgen": {"target": (0.48, -0.10, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
+        "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -861,6 +865,12 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
+                    if task_mode == "rack_insert":
+                        # No pretending a sinusoidal preview is a trained
+                        # insertion policy. Hold the arm until teleop or a
+                        # separately trained checkpoint is selected.
+                        actions.zero_()
+                        actions[:, 7] = 1.0
                     step_observations, rewards, terminated, truncated, _ = env.step(actions)
                     policy_observations = step_observations.get("policy") if isinstance(step_observations, dict) else step_observations
                     policy_observations = apply_vision_estimate(policy_observations)

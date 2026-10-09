@@ -15,7 +15,8 @@ if marker not in source:
 source = source.replace(
     marker,
     marker + "\nimport isaac_vision_task  # register web vision environments"
-    + "\nimport isaac_labware_task  # register web labware environments",
+    + "\nimport isaac_labware_task  # register web labware environments"
+    + "\nimport isaac_rack_insert_task  # register additional upright insertion task",
     1,
 )
 training_marker = "    # dump the configuration into log-directory"

@@ -31,12 +31,14 @@ TASKS = {
     "vision": "Isaac-Lift-Cube-Franka-Vision-v0",
     "labware_lift": "Isaac-Franka-Test-Tube-Lift-v0",
     "labware": "Isaac-Franka-Labware-Placement-v0",
+    "rack_insert": "Isaac-Franka-Upright-Tube-Rack-Insert-v0",
 }
 EXPERIMENTS = {
     "state": "franka_lift",
     "vision": "franka_lift_vision",
     "labware_lift": "franka_test_tube_lift",
     "labware": "franka_labware_placement",
+    "rack_insert": "franka_upright_tube_rack_insert",
 }
 # This installed Isaac Lab release parses ``--experiment_name`` but keeps the
 # task's registered experiment name. Keep discovery aligned with that output.
@@ -96,7 +98,7 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--num-envs", type=int, choices=(16, 32, 64, 128, 256, 512), required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--isaac-task", choices=("state", "vision", "labware_lift", "labware"), default="state")
+    parser.add_argument("--isaac-task", choices=("state", "vision", "labware_lift", "labware", "rack_insert"), default="state")
     parser.add_argument("--resume-checkpoint")
     parser.add_argument("--resume-checkpoint-id")
     parser.add_argument("--demo-path", action="append", default=[])
@@ -104,7 +106,7 @@ def main() -> None:
     args = parser.parse_args()
     task = TASKS[args.isaac_task]
     experiment = EXPERIMENTS[args.isaac_task]
-    train_script = VISION_TRAIN_SCRIPT if args.demo_path or args.isaac_task in {"vision", "labware_lift", "labware"} else TRAIN_SCRIPT
+    train_script = VISION_TRAIN_SCRIPT if args.demo_path or args.isaac_task in {"vision", "labware_lift", "labware", "rack_insert"} else TRAIN_SCRIPT
 
     run_directory = Path(args.run_directory).resolve()
     run_directory.mkdir(parents=True, exist_ok=True)
