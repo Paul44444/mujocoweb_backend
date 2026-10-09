@@ -30,6 +30,7 @@ def vary_pickup_layout(env, position_range=0., yaw_range_degrees=0., generator=N
     import math
     import torch
     from isaaclab.utils import math as math_utils
+    from isaacsim.core.prims import XFormPrim
     env = env.unwrapped
     position_range = max(0., min(.05, float(position_range)))
     yaw_range_degrees = max(0., min(30., float(yaw_range_degrees)))
@@ -44,8 +45,18 @@ def vary_pickup_layout(env, position_range=0., yaw_range_degrees=0., generator=N
         pose = asset.data.default_root_state[:1, :7].clone()
         pose[:, :3] = center + math_utils.quat_apply(rotation, pose[:, :3] - center) + offset + env.scene.env_origins[:1]
         pose[:, 3:7] = math_utils.quat_mul(rotation, pose[:, 3:7])
+        if name.startswith("support_"):
+            # PhysX tensor teleports do not reliably author the USD/Fabric
+            # transforms for kinematic blocks. Mirror only these reset poses
+            # into the scene graph; the dynamic tube stays physics-driven.
+            views = getattr(env, "_pickup_support_visuals", {})
+            if name not in views:
+                views[name] = XFormPrim(asset.root_physx_view.prim_paths[0], reset_xform_properties=False)
+                env._pickup_support_visuals = views
+            views[name].set_world_poses(pose[:, :3], pose[:, 3:7], usd=True)
         asset.write_root_pose_to_sim(pose)
         asset.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device))
+    # Flush scene-graph changes to the renderer before the paused reset frame.
     env.sim.forward()
     env.scene.update(0.)
     return {"offset_m": offset.tolist(), "yaw_degrees": math.degrees(float(yaw))}

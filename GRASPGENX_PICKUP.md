@@ -26,6 +26,12 @@ Changing a slider does not teleport anything during a running pickup. Start
 with ±1 cm; failures at larger ranges are possible. This tests grasp-coordinate
 transfer and the IK/execution pipeline, not camera perception.
 
+Kinematic support reset poses are mirrored into USD as well as PhysX, then
+flushed to Fabric with `sim.forward()`. PhysX-only tensor teleports can otherwise
+leave the rendered blocks at their old locations. The cached XForm views are
+used only at reset, not every frame. The pickup smoke test also compares the
+support scene-graph/Fabric positions against their physical poses.
+
 ## Scope and limitations
 
 - Candidates are precomputed for the current 7.5 mm radius / 92 mm cylinder.

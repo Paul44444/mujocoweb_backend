@@ -37,6 +37,21 @@ try:
     layout = isaac_graspgen_task.vary_pickup_layout(env, args.position_range, args.yaw_range, generator)
     obs = env.unwrapped.observation_manager.compute(update_history=True)
     print("GRASP_LAYOUT", json.dumps(layout), flush=True)
+    def check_support_visuals():
+        import numpy as np
+        from isaacsim.core.utils.stage import get_current_stage
+        for name in ("support_a", "support_b"):
+            asset = env.unwrapped.scene[name]
+            visual_position, visual_orientation = env.unwrapped._pickup_support_visuals[name].get_world_poses(usd=True)
+            expected = asset.data.root_pose_w[:1].cpu().numpy()
+            np.testing.assert_allclose(visual_position.cpu().numpy(), expected[:, :3], atol=1e-6)
+            actual_q = visual_orientation.cpu().numpy()
+            assert abs(float((actual_q * expected[:, 3:7]).sum())) > .99999
+            prim = get_current_stage(fabric=True).GetPrimAtPath(asset.root_physx_view.prim_paths[0])
+            attribute = prim.GetAttribute("_worldPosition")
+            if attribute.IsValid():
+                np.testing.assert_allclose(np.asarray(attribute.Get()), expected[0, :3], atol=1e-6)
+        print("SUPPORT_VISUAL_SYNC_PASS", flush=True)
     controller = GraspGenTubeController(env, args.grasps)
     initial = float(env.unwrapped.scene["object"].data.root_pos_w[0, 2])
     peak = initial
@@ -49,6 +64,8 @@ try:
             held_steps = held_steps + 1 if controller.stage == "hold" and height > initial + .15 else 0
             if step % 100 == 0:
                 print("GRASP_TEST", step, controller.stage, height, flush=True)
+            if step in (1, 600):
+                check_support_visuals()
             if held_steps >= 500 or bool(terminated[0]) or bool(truncated[0]) or controller.stage == "failed":
                 break
     result = {"steps": step + 1, "stage": controller.stage, "initial_height_m": initial,
