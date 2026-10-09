@@ -4,6 +4,7 @@ websockets
 
 numpy
 scipy
+threadpoolctl
 opencv-python-headless
 imageio
 imageio-ffmpeg

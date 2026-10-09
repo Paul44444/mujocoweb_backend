@@ -23,10 +23,17 @@ class RackInsertionController:
         self.ticks = 0
         self.target = None
 
+    def object_pose(self):
+        return self.env.scene["object"].data.root_pose_w[:1]
+
+    def destination(self):
+        return self.robot.data.root_pos_w.new_tensor([[*HOLE_CENTER, SEATED_CENTER_Z]]) + self.env.scene.env_origins[:1]
+
     def __call__(self, observations):
         env, robot = self.env, self.robot
         hand = robot.data.body_pose_w[:1, self.hand]
-        obj = env.scene["object"].data.root_pose_w[:1]
+        obj = self.object_pose()
+        destination = self.destination()
         self.ticks += 1
         actions = torch.zeros(env.action_space.shape, device=env.device)
         actions[:, :7] = (robot.data.joint_pos[:1, :7] - robot.data.default_joint_pos[:1, :7]) / 0.5
@@ -47,8 +54,8 @@ class RackInsertionController:
         elif self.stage == "lift":
             goal[:, 2] += 0.16
         elif self.stage in {"transfer", "lower", "release", "retreat", "done"}:
-            goal[:, :2] = obj.new_tensor(HOLE_CENTER) + env.scene.env_origins[:1, :2]
-            goal[:, 2] = SEATED_CENTER_Z + 0.034 + 0.1034
+            goal[:, :2] = destination[:, :2]
+            goal[:, 2] = destination[:, 2] + 0.034 + 0.1034
             if self.stage == "transfer":
                 goal[:, 2] += 0.14
             elif self.stage in {"retreat", "done"}:
@@ -57,8 +64,8 @@ class RackInsertionController:
                 # Follow the actual held tube, correcting grasp slippage and
                 # small offsets instead of trusting an ideal attachment.
                 offset = hand[:, :3] - obj[:, :3]
-                goal[:, :2] = obj.new_tensor(HOLE_CENTER) + env.scene.env_origins[:1, :2] + offset[:, :2]
-                goal[:, 2] = SEATED_CENTER_Z + offset[:, 2] + 0.001
+                goal[:, :2] = destination[:, :2] + offset[:, :2]
+                goal[:, 2] = destination[:, 2] + offset[:, 2] + 0.001
         if self.stage == "failed":
             return actions
         delta = goal - self.target

@@ -1,0 +1,26 @@
+{
+  "controller": "rack_insertion_rgbd",
+  "physics_verified": true,
+  "environment": "Isaac-Franka-Rack-Insert-Vision-Play-v0",
+  "validation": [
+    {
+      "initial_tube_error_m": 0.0005223533953540027,
+      "initial_goal_error_m": 0.0002634093980304897,
+      "steps": 1717,
+      "stable_seconds": 6.0
+    },
+    {
+      "initial_tube_error_m": 0.0005223711486905813,
+      "initial_goal_error_m": 0.00025945898960344493,
+      "steps": 1720,
+      "stable_seconds": 6.0,
+      "truth_access_guard": true,
+      "rack_variation": {
+        "x": 0.012,
+        "y": -0.008,
+        "yaw_degrees": 8.0
+      }
+    }
+  ],
+  "limitation": "Calibrated RGB-D cameras and known colored spherical markers. IK reference, not neural. Uses no object/rack truth for control; simulated depth has no real sensor noise."
+}

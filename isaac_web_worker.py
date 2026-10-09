@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -71,7 +71,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -110,6 +110,9 @@ def playback_mode(actor):
 def load_actor(checkpoint: Path) -> torch.nn.Module:
     """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
     if checkpoint.suffix == ".json":
+        if json.loads(checkpoint.read_text()).get("controller") == "rack_insertion_rgbd":
+            from isaac_rack_vision_controller import VisionRackController
+            return VisionRackController(env)
         if json.loads(checkpoint.read_text()).get("controller") == "rack_insertion_ik":
             from isaac_rack_controller import RackInsertionController
             return RackInsertionController(env)
@@ -155,6 +158,12 @@ try:
     elif task_mode == "graspgen":
         import isaac_graspgen_task
         effective_task = "Isaac-Franka-GraspGenX-Tube-Pick-Play-v0"
+    elif task_mode == "rack_vision":
+        torch.set_num_threads(1)
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(limits=1, user_api="blas")
+        import isaac_rack_vision_task
+        effective_task = "Isaac-Franka-Rack-Insert-Vision-Play-v0"
     elif task_mode == "rack_insert":
         effective_task = "Isaac-Franka-Upright-Tube-Rack-Insert-Play-v0"
     elif task_mode == "labware_lift":
@@ -191,6 +200,8 @@ try:
     )
     env = gym.make(effective_task, cfg=env_cfg)
     reset_observations, _ = env.reset()
+    if task_mode == "rack_vision":
+        isaac_rack_vision_task.aim_cameras(env)
     camera = env.unwrapped.scene["web_camera"]
     if task_mode == "vision":
         vision_camera = env.unwrapped.scene["vision_camera"]
@@ -218,6 +229,7 @@ try:
         "graspgen": {"target": (0.48, -0.10, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
+        "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -872,7 +884,7 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                    if task_mode == "rack_insert":
+                    if task_mode in {"rack_insert", "rack_vision"}:
                         # No pretending a sinusoidal preview is a trained
                         # insertion policy. Hold the arm until teleop or a
                         # separately trained checkpoint is selected.
@@ -896,9 +908,9 @@ try:
                 quality=max(50, min(95, args.jpeg_quality)),
             )
             os.replace(image_path, frame_path)
-            if task_mode == "vision" and step % 3 == 0:
+            if task_mode in {"vision", "rack_vision"} and step % 3 == 0:
                 vision_frame = (
-                    env.unwrapped.scene["vision_camera"]
+                    env.unwrapped.scene["rack_camera_a" if task_mode == "rack_vision" else "vision_camera"]
                     .data.output["rgb"][0]
                     .detach()
                     .cpu()
@@ -930,6 +942,9 @@ try:
                     "demo_playback_steps": len(demo_state["playback"]) if demo_state["playback"] is not None else None,
                     "checkpoint": checkpoint_id,
                     "grasp_controller_stage": getattr(inference_policy, "stage", None),
+                    "rack_perception": getattr(getattr(inference_policy, "perception", None), "last_error", None),
+                    "rack_estimated_tube": inference_policy.measured_pose[0, :3].tolist() if task_mode == "rack_vision" and hasattr(inference_policy, "measured_pose") else None,
+                    "rack_estimated_goal": inference_policy.measured_destination[0].tolist() if task_mode == "rack_vision" and hasattr(inference_policy, "measured_destination") else None,
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
                     "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
