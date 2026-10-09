@@ -266,14 +266,15 @@ def _active_run() -> Dict[str, object] | None:
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
     isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware"]] = Query(default=None),
-) -> Dict[str, List[Dict[str, object]]]:
+) -> Dict[str, object]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
+    active = next((run for run in runs if run["status"].get("status") in {"starting", "training", "paused"}), None)
     if engine:
         runs = [run for run in runs if run.get("config", {}).get("engine", "mujoco") == engine]
     if isaac_task:
         runs = [run for run in runs if run.get("config", {}).get("isaac_task", "state") == isaac_task]
-    return {"runs": runs[:20]}
+    return {"runs": runs[:20], "active_run": active}
 
 
 @router.get("/runs/{run_id}")
