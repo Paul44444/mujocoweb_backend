@@ -452,6 +452,13 @@ def start_training(request: StartTrainingRequest) -> Dict[str, object]:
                 raise HTTPException(status_code=422, detail="Checkpoint resume currently supports Isaac Lab only.")
             resume_path = _checkpoint_path(request.resume_checkpoint)
             resume_config = _read_json(resume_path.parent.parent / "config.json", {})
+            demo_user = resume_config.get("user", user)
+            saved_demo_ids = [demo_id if "/" in demo_id else f"{demo_user}/{demo_id}" for demo_id in resume_config.get("demo_ids", [])]
+            if saved_demo_ids:
+                if request.demo_ids and set(request.demo_ids) != set(saved_demo_ids):
+                    raise HTTPException(status_code=422, detail="Resume uses the checkpoint's original demonstrations; select the same demos or leave the demo selection empty.")
+                request.demo_ids = saved_demo_ids
+                demo_paths = [_demonstration_path(demo_id, demo_user, request.isaac_task) for demo_id in saved_demo_ids]
             resume_task = resume_config.get("isaac_task", "state")
             compatible = (
                 resume_task == request.isaac_task

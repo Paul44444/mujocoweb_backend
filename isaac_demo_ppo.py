@@ -53,14 +53,21 @@ def reset_from_demonstrations(env, env_ids, demonstration_paths):
     env.episode_length_buf[env_ids] = 0
 
 
-def install_demo_guided_ppo(runner, demonstration_paths, total_iterations):
+def install_demo_guided_ppo(runner, demonstration_paths, total_iterations, resume_state=None):
     """Add BC gradients to each PPO minibatch using the same optimizer step."""
     env = runner.env.unwrapped
     alg = runner.alg
     observations, actions = runner.web_demo_dataset
     observations, actions = observations.to(runner.device), actions.to(runner.device)
-    state = {"iteration": 0, "losses": []}
-    warmup = min(20, max(1, total_iterations // 10))
+    state = dict(resume_state or {})
+    state.setdefault("iteration", 0)
+    state.setdefault("curriculum_iterations", total_iterations)
+    state.setdefault("warmup_iterations", min(20, max(1, total_iterations // 10)))
+    state["losses"] = []
+    horizon = state["curriculum_iterations"]
+    warmup = state["warmup_iterations"]
+    runner.web_demo_ppo_state = state
+    env.web_demo_variation = curriculum_settings(state["iteration"], horizon)[0]
     actor_parameters = list(alg.policy.actor.parameters())
     alg.learning_rate = 1.0e-5
     alg.schedule = "fixed"
@@ -80,7 +87,7 @@ def install_demo_guided_ppo(runner, demonstration_paths, total_iterations):
             prediction = alg.policy.actor(observations[ids])
             loss = 10 * (prediction[:, :7] - actions[ids, :7]).square().mean()
             loss = loss + (prediction[:, 7:] - actions[ids, 7:]).square().mean()
-            _, weight = curriculum_settings(state["iteration"], total_iterations)
+            _, weight = curriculum_settings(state["iteration"], horizon)
             (weight * loss).backward()
             torch.nn.utils.clip_grad_norm_(actor_parameters, 0.5)
             state["losses"].append(float(loss.detach()))
@@ -95,7 +102,9 @@ def install_demo_guided_ppo(runner, demonstration_paths, total_iterations):
     def update():
         result = original_update()
         state["iteration"] += 1
-        variation, weight = curriculum_settings(state["iteration"], total_iterations)
+        variation, weight = curriculum_settings(state["iteration"], horizon)
+        state["variation_cm"] = variation * 100
+        state["bc_weight"] = weight
         env.web_demo_variation = variation
         payload = {"iteration": state["iteration"], "variation_cm": variation * 100,
                    "bc_weight": weight, "critic_warmup": state["iteration"] < warmup,
@@ -108,4 +117,30 @@ def install_demo_guided_ppo(runner, demonstration_paths, total_iterations):
     alg.update = update
     # BC validation has reset physics. The runner must obtain fresh observations.
     env.reset()
-    print(f"Demo-guided PPO enabled: critic warmup {warmup} iterations; BC retained; XY curriculum 0..5 cm", flush=True)
+    print(f"Demo-guided PPO enabled: cumulative iteration {state['iteration']}; remaining critic warmup {max(0, warmup - state['iteration'])}; XY variation +/-{env.web_demo_variation * 100:.2f} cm", flush=True)
+
+
+def prepare_resumed_demo_dataset(runner, paths, duration, saved_dataset=None):
+    """Recover the exact BC correction dataset, or rebuild it for legacy files."""
+    if saved_dataset is not None:
+        runner.web_demo_dataset = (saved_dataset["observations"], saved_dataset["actions"])
+        return
+    observations, actions = [], []
+    for path in paths:
+        with np.load(path) as data:
+            obs = np.asarray(data["observations"], dtype=np.float32).copy()
+            obs[:, -8:] = 0.0
+            obs[:, -8] = np.arange(len(obs)) * runner.env.unwrapped.step_dt / duration
+            observations.append(obs)
+            actions.append(np.asarray(data["actions"], dtype=np.float32).copy())
+    runner.web_demo_dataset = (torch.from_numpy(np.concatenate(observations)), torch.from_numpy(np.concatenate(actions)))
+
+
+def checkpoint_demo_state(runner, paths, duration):
+    state = {key: value for key, value in runner.web_demo_ppo_state.items() if key != "losses"}
+    variation, weight = curriculum_settings(state["iteration"], state["curriculum_iterations"])
+    state.update(variation_cm=variation * 100, bc_weight=weight)
+    obs, actions = runner.web_demo_dataset
+    return {"demo_control": True, "demo_duration": duration, "demo_guided_ppo": True,
+            "demo_paths": list(paths), "demo_ppo_state": state,
+            "demo_dataset": {"observations": obs.detach().cpu(), "actions": actions.detach().cpu()}}

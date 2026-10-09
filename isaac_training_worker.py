@@ -209,6 +209,8 @@ def main() -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = f"{ROOT}:{environment.get('PYTHONPATH', '')}"
         environment["PYTHONUNBUFFERED"] = "1"
+        if args.resume_checkpoint:
+            environment["ISAAC_RESUME_CHECKPOINT"] = str(Path(args.resume_checkpoint).resolve())
         if args.demo_path:
             environment["ISAAC_DEMO_PATHS"] = json.dumps(args.demo_path)
             environment["ISAAC_BC_EPOCHS"] = str(args.bc_epochs)
