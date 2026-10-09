@@ -37,12 +37,14 @@ source = source.replace(
             \"model_state_dict\": runner.alg.policy.state_dict(),
             \"optimizer_state_dict\": runner.alg.optimizer.state_dict(),
             \"iter\": 0,
-            \"infos\": {\"phase\": \"behavior_cloning\", \"demo_control\": True, \"demo_duration\": env_cfg.episode_length_s},
+            \"infos\": {\"phase\": \"behavior_cloning\", \"demo_control\": True, \"demo_duration\": demo_episode_seconds},
         }, os.path.join(log_dir, \"model_bc.pt\"))
         original_save = runner.save
         def save_with_demo_control(path, infos=None):
-            original_save(path, infos={**(infos or {}), \"demo_control\": True, \"demo_duration\": env_cfg.episode_length_s})
+            original_save(path, infos={**(infos or {}), \"demo_control\": True, \"demo_duration\": demo_episode_seconds, \"demo_guided_ppo\": True})
         runner.save = save_with_demo_control
+        from isaac_demo_ppo import install_demo_guided_ppo
+        install_demo_guided_ppo(runner, demonstration_paths, agent_cfg.max_iterations)
 
 """ + training_marker,
     1,
@@ -72,6 +74,9 @@ source = source.replace(
         env_cfg.observations.policy.actions.func = demonstration_phase
         env_cfg.observations.policy.actions.params = {\"duration\": demo_episode_seconds}
         env_cfg.observations.policy.actions.scale = None
+        from isaac_demo_ppo import reset_from_demonstrations
+        env_cfg.events.reset_object_position.func = reset_from_demonstrations
+        env_cfg.events.reset_object_position.params = {\"demonstration_paths\": demonstration_paths}
         print(
             f\"Demo-aware PPO episode length: {env_cfg.episode_length_s:.2f}s \"
             f\"(longest demonstration: {demo_episode_seconds:.2f}s)\",
@@ -82,4 +87,8 @@ source = source.replace(
     1,
 )
 namespace = {"__name__": "__main__", "__file__": str(script)}
+source = source.replace(
+    "init_at_random_ep_len=True",
+    'init_at_random_ep_len=not bool(json.loads(os.environ.get("ISAAC_DEMO_PATHS", "[]")))',
+)
 exec(compile(source, str(script), "exec"), namespace)

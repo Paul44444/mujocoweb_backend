@@ -68,7 +68,7 @@ def sync_checkpoints(output_directory: Path | None, destination: Path) -> list[s
     if output_directory is None:
         return []
     destination.mkdir(parents=True, exist_ok=True)
-    for name in ("bc_rollout_validation.json", "demo_replay_validation.json"):
+    for name in ("bc_rollout_validation.json", "demo_replay_validation.json", "demo_ppo_status.json"):
         validation = output_directory / name
         if validation.is_file():
             shutil.copy2(validation, destination.parent / name)

@@ -246,6 +246,7 @@ def _run_payload(run_directory: Path) -> Dict[str, object]:
         "metrics": _sample_metrics(metrics),
         "bc_metrics": _sample_metrics(bc_metrics),
         "bc_validation": _read_json(run_directory / "bc_rollout_validation.json", {}),
+        "demo_ppo": _read_json(run_directory / "demo_ppo_status.json", {}),
         "checkpoints": [path.name for path in checkpoints],
     }
 

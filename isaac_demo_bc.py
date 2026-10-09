@@ -41,13 +41,14 @@ def pretrain_runner_from_demonstrations(
     """Fit the existing RSL-RL actor to web-recorded observation/action pairs."""
     observations: list[np.ndarray] = []
     actions: list[np.ndarray] = []
+    duration = longest_demonstration_seconds(demonstration_paths, runner.env.unwrapped.step_dt)
     for raw_path in demonstration_paths:
         path = Path(raw_path)
         with np.load(path) as payload:
             demo_observations = np.asarray(payload["observations"], dtype=np.float32)
             demo_observations = demo_observations.copy()
             demo_observations[:, -8:] = 0.0
-            demo_observations[:, -8] = np.arange(len(demo_observations)) / len(demo_observations)
+            demo_observations[:, -8] = np.arange(len(demo_observations)) * runner.env.unwrapped.step_dt / duration
             demo_actions = np.asarray(payload["actions"], dtype=np.float32)
             demo_actions = demo_actions.copy()
         if demo_observations.ndim != 2 or demo_actions.ndim != 2:
@@ -144,6 +145,7 @@ def pretrain_runner_from_demonstrations(
             runner.alg.policy.log_std.fill_(float(np.log(0.03)))
         elif hasattr(runner.alg.policy, "std"):
             runner.alg.policy.std.fill_(0.03)
+    runner.web_demo_dataset = (observation_tensor, action_tensor)
 
 
 def validate_demonstration_rollout(runner, demonstration_path: str, replay: bool = False, collect: bool = False):
