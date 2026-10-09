@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -70,7 +70,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -104,6 +104,9 @@ def stop_worker(_signum: int, _frame: object) -> None:
 
 def load_actor(checkpoint: Path) -> torch.nn.Module:
     """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
+    if checkpoint.suffix == ".json":
+        from isaac_graspgen_controller import GraspGenTubeController
+        return GraspGenTubeController(env, checkpoint)
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     model_state = payload["model_state_dict"]
     actor_state = {key.removeprefix("actor."): value.cpu() for key, value in model_state.items() if key.startswith("actor.")}
@@ -141,6 +144,9 @@ started_at = time.monotonic()
 try:
     if task_mode == "vision":
         effective_task = "Isaac-Lift-Cube-Franka-Vision-Play-v0"
+    elif task_mode == "graspgen":
+        import isaac_graspgen_task
+        effective_task = "Isaac-Franka-GraspGenX-Tube-Pick-Play-v0"
     elif task_mode == "labware_lift":
         effective_task = "Isaac-Franka-Test-Tube-Lift-Play-v0"
     elif task_mode == "labware":
@@ -199,6 +205,7 @@ try:
         "state": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
         "vision": {"target": (0.45, 0.0, 0.45), "orbit": (62.0, 20.0, 2.15)},
         "labware_lift": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
+        "graspgen": {"target": (0.48, -0.10, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
@@ -604,6 +611,8 @@ try:
                         demo_state["playback_last_action"] = None
                         set_teleop_drive_gains(bool(getattr(inference_policy, "web_demo_control", False)))
                         reset = env.reset()
+                        if hasattr(inference_policy, "reset"):
+                            inference_policy.reset()
                         policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
                         step = 0
                         episode += 1
@@ -898,6 +907,7 @@ try:
                     "demo_playback_step": int(demo_state["playback_index"]) if demo_state["playback"] is not None else None,
                     "demo_playback_steps": len(demo_state["playback"]) if demo_state["playback"] is not None else None,
                     "checkpoint": checkpoint_id,
+                    "grasp_controller_stage": getattr(inference_policy, "stage", None),
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
                     "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
@@ -929,6 +939,8 @@ try:
                 continue
             step += 1
             if bool(terminated[0].item() or truncated[0].item()):
+                if hasattr(inference_policy, "reset"):
+                    inference_policy.reset()
                 if inference_policy is None:
                     env.reset()
                 step = 0

@@ -50,13 +50,13 @@ class StartTrainingRequest(BaseModel):
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
-    isaac_task: Literal["state", "vision", "labware_lift", "labware"] = "state"
+    isaac_task: Literal["state", "vision", "labware_lift", "labware", "graspgen"] = "state"
     demo_ids: List[str] = Field(default_factory=list, max_length=8)
     bc_epochs: int = Field(default=200, ge=1, le=2000)
 
 
 class SelectIsaacTaskRequest(BaseModel):
-    task: Literal["state", "vision", "labware_lift", "labware"]
+    task: Literal["state", "vision", "labware_lift", "labware", "graspgen"]
 
 
 class SelectCheckpointRequest(BaseModel):
@@ -132,7 +132,15 @@ def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
 
 def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, object]]:
     checkpoints = []
+    grasp_file = Path(__file__).resolve().parent / "assets" / "graspgenx_tube.json"
+    if isaac_task in {None, "graspgen"} and _read_json(grasp_file, {}).get("physics_verified"):
+        checkpoints.append({"id": "pretrained/graspgenx-tube", "run_id": "pretrained", "name": "graspgenx-tube",
+            "label": "NVIDIA GraspGenX · Test tube · pretrained grasp + IK",
+            "modified_at": grasp_file.stat().st_mtime, "deletable": False, "trainable": False,
+            "isaac_task": "graspgen"})
     if not RUNS_DIRECTORY.is_dir():
+        return checkpoints
+    if isaac_task == "graspgen":
         return checkpoints
     for run_directory in sorted(RUNS_DIRECTORY.iterdir(), reverse=True):
         config = _read_json(run_directory / "config.json", {})
@@ -266,7 +274,7 @@ def _active_run() -> Dict[str, object] | None:
 @router.get("/runs")
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
-    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen"]] = Query(default=None),
 ) -> Dict[str, object]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
@@ -290,7 +298,7 @@ def get_training_run(run_id: str) -> Dict[str, object]:
 
 @router.get("/checkpoints")
 def list_checkpoints(
-    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen"]] = Query(default=None),
 ) -> Dict[str, object]:
     selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
     return {"checkpoints": _checkpoint_payloads(isaac_task), "selected": selected}
@@ -309,8 +317,14 @@ def select_isaac_task(request: SelectIsaacTaskRequest, background_tasks: Backgro
     current = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
     if current == request.task and _read_json(ISAAC_STATUS_PATH, {}).get("status") == "ready":
         return {"task": request.task, "status": "ready", "restarting": False}
+    if request.task == "graspgen":
+        path = Path(__file__).resolve().parent / "assets" / "graspgenx_tube.json"
+        if not _read_json(path, {}).get("physics_verified"):
+            raise HTTPException(status_code=503, detail="The GraspGenX pickup is not validated on this host yet.")
+        _write_json(ISAAC_POLICY_SELECTION, {"id": "pretrained/graspgenx-tube", "path": str(path), "isaac_task": request.task})
+    else:
+        _write_json(ISAAC_POLICY_SELECTION, {"id": None, "path": None, "isaac_task": request.task})
     _write_json(ISAAC_TASK_SELECTION, {"task": request.task, "selected_at": time.time()})
-    _write_json(ISAAC_POLICY_SELECTION, {"id": None, "path": None, "isaac_task": request.task})
     _write_json(ISAAC_STATUS_PATH, {"status": "restarting", "task": request.task})
     background_tasks.add_task(_restart_isaac_runtime)
     return {"task": request.task, "status": "restarting", "restarting": True, "estimated_seconds": 45}
@@ -383,7 +397,12 @@ def delete_checkpoint(request: DeleteCheckpointRequest) -> Dict[str, object]:
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     current_task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
-    if request.checkpoint:
+    if request.checkpoint == "pretrained/graspgenx-tube":
+        path = Path(__file__).resolve().parent / "assets" / "graspgenx_tube.json"
+        if current_task != "graspgen" or not _read_json(path, {}).get("physics_verified"):
+            raise HTTPException(status_code=409, detail="Select the GraspGenX Tube Pick environment first.")
+        payload = {"id": request.checkpoint, "path": str(path), "isaac_task": "graspgen", "selected_at": time.time()}
+    elif request.checkpoint:
         path = _checkpoint_path(request.checkpoint)
         run_config = _read_json(path.parent.parent / "config.json", {})
         checkpoint_task = run_config.get("isaac_task", "state")
@@ -437,6 +456,8 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
 @router.post("/start")
 def start_training(request: StartTrainingRequest) -> Dict[str, object]:
     with manager_lock:
+        if request.engine == "isaaclab" and request.isaac_task == "graspgen":
+            raise HTTPException(status_code=422, detail="GraspGenX is a pretrained grasp planner + IK, not a PPO actor. Use the original Lift Test Tube task for training.")
         if request.engine == "mujoco" and request.iterations > 25:
             raise HTTPException(status_code=422, detail="MuJoCo web training is limited to 25 iterations per run.")
         user = re.sub(r"[^A-Za-z0-9_-]", "-", request.user).strip("-")[:32] or "Guest"
