@@ -11,6 +11,8 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser()
 parser.add_argument("--grasps", type=Path, required=True)
 parser.add_argument("--validation-output", type=Path)
+parser.add_argument("--position-range", type=float, default=0.)
+parser.add_argument("--yaw-range", type=float, default=0.)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 launcher = AppLauncher(args)
@@ -31,6 +33,10 @@ cfg.scene.robot.spawn.rigid_props.disable_gravity = True
 env = gym.make("Isaac-Franka-GraspGenX-Tube-Pick-Play-v0", cfg=cfg)
 try:
     obs, _ = env.reset()
+    generator = torch.Generator(device=env.unwrapped.device).manual_seed(42)
+    layout = isaac_graspgen_task.vary_pickup_layout(env, args.position_range, args.yaw_range, generator)
+    obs = env.unwrapped.observation_manager.compute(update_history=True)
+    print("GRASP_LAYOUT", json.dumps(layout), flush=True)
     controller = GraspGenTubeController(env, args.grasps)
     initial = float(env.unwrapped.scene["object"].data.root_pos_w[0, 2])
     peak = initial
@@ -47,7 +53,7 @@ try:
                 break
     result = {"steps": step + 1, "stage": controller.stage, "initial_height_m": initial,
               "peak_height_m": peak, "final_height_m": height, "held_seconds": held_steps * cfg.sim.dt * cfg.decimation,
-              "passed": held_steps >= 500, "seed": cfg.seed}
+              "passed": held_steps >= 500, "seed": cfg.seed, "layout": layout}
     print("GRASP_RESULT", json.dumps(result), flush=True)
     if not result["passed"]:
         raise RuntimeError("Pickup did not hold a real-contact lift for 10 simulated seconds")

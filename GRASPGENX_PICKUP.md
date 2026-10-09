@@ -18,6 +18,14 @@ The pretrained controller is selected automatically. Start/Pause control it;
 Reset repeats the pickup. It is playback-only; use the original Stage 1 task
 for BC/PPO. Existing checkpoints are not overwritten.
 
+The dedicated start-variation controls sample independent uniform XY offsets
+up to ±5 cm and a world-Z yaw up to ±30 degrees on manual Reset. Tube and
+kinematic supports receive the same rigid transform, preserving their layout.
+Zero ranges restore the original configuration without accumulating offsets.
+Changing a slider does not teleport anything during a running pickup. Start
+with ±1 cm; failures at larger ranges are possible. This tests grasp-coordinate
+transfer and the IK/execution pipeline, not camera perception.
+
 ## Scope and limitations
 
 - Candidates are precomputed for the current 7.5 mm radius / 92 mm cylinder.

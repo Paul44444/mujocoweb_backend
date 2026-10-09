@@ -611,6 +611,11 @@ try:
                         demo_state["playback_last_action"] = None
                         set_teleop_drive_gains(bool(getattr(inference_policy, "web_demo_control", False)))
                         reset = env.reset()
+                        if task_mode == "graspgen":
+                            from isaac_graspgen_task import vary_pickup_layout
+                            layout = vary_pickup_layout(env, command.get("position_variation", 0.), command.get("yaw_variation", 0.))
+                            reset = (env.unwrapped.observation_manager.compute(update_history=True), {})
+                            print(f"GraspGenX reset layout: {layout}", flush=True)
                         if hasattr(inference_policy, "reset"):
                             inference_policy.reset()
                         policy_observations = reset[0].get("policy") if isinstance(reset, tuple) and isinstance(reset[0], dict) else (reset[0] if isinstance(reset, tuple) else reset)
