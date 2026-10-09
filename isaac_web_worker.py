@@ -103,9 +103,16 @@ def stop_worker(_signum: int, _frame: object) -> None:
     stopping = True
 
 
+def playback_mode(actor):
+    return "reference_controller" if getattr(actor, "web_reference_control", False) else ("trained_policy" if actor else "scripted_preview")
+
+
 def load_actor(checkpoint: Path) -> torch.nn.Module:
     """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
     if checkpoint.suffix == ".json":
+        if json.loads(checkpoint.read_text()).get("controller") == "rack_insertion_ik":
+            from isaac_rack_controller import RackInsertionController
+            return RackInsertionController(env)
         from isaac_graspgen_controller import GraspGenTubeController
         return GraspGenTubeController(env, checkpoint)
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -638,7 +645,7 @@ try:
                     atomic_json(status_path, {
                         "status": "ready",
                         "task": task_mode,
-                        "mode": "trained_policy",
+                        "mode": playback_mode(inference_policy),
                         "checkpoint": checkpoint_id,
                         "hot_swapped_at": time.time(),
                     })
@@ -773,7 +780,7 @@ try:
                 if command.get("type") == "policy_load":
                     atomic_json(status_path, {
                         "status": "error",
-                        "mode": "trained_policy",
+                        "mode": playback_mode(inference_policy),
                         "checkpoint": checkpoint_id,
                         "error": f"{type(exc).__name__}: {exc}",
                     })
@@ -791,7 +798,7 @@ try:
         {
             "status": "ready",
             "task": task_mode,
-            "mode": "trained_policy" if inference_policy else "scripted_preview",
+            "mode": playback_mode(inference_policy),
             "checkpoint": checkpoint_id,
             "startup_seconds": round(time.monotonic() - started_at, 3),
         },
@@ -916,7 +923,7 @@ try:
                     "reward": float(rewards[0].item()),
                     "simulation_time": simulation_time,
                     "paused": simulation_paused,
-                    "mode": "demo_recording" if demo_state["recording"] else ("demo_playback" if demo_state["playback"] is not None else ("trained_policy" if inference_policy else "scripted_preview")),
+                    "mode": "demo_recording" if demo_state["recording"] else ("demo_playback" if demo_state["playback"] is not None else playback_mode(inference_policy)),
                     "demo_recording": demo_state["recording"],
                     "demo_steps": len(demo_state["actions"]),
                     "demo_playback_step": int(demo_state["playback_index"]) if demo_state["playback"] is not None else None,

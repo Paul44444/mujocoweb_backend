@@ -132,6 +132,12 @@ def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
 
 def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, object]]:
     checkpoints = []
+    rack_file = ROOT / "assets" / "rack_insertion_reference.json"
+    if isaac_task in {None, "rack_insert"} and _read_json(rack_file, {}).get("physics_verified"):
+        checkpoints.append({"id": "reference/rack-insertion", "run_id": "reference", "name": "rack-insertion",
+            "label": "Reference · Contact-aware rack insertion · IK (not neural)",
+            "modified_at": rack_file.stat().st_mtime, "deletable": False, "trainable": False,
+            "isaac_task": "rack_insert"})
     grasp_file = Path(__file__).resolve().parent / "assets" / "graspgenx_tube.json"
     if isaac_task in {None, "graspgen"} and _read_json(grasp_file, {}).get("physics_verified"):
         checkpoints.append({"id": "pretrained/graspgenx-tube", "run_id": "pretrained", "name": "graspgenx-tube",
@@ -324,6 +330,8 @@ def select_isaac_task(request: SelectIsaacTaskRequest, background_tasks: Backgro
         if not _read_json(path, {}).get("physics_verified"):
             raise HTTPException(status_code=503, detail="The GraspGenX pickup is not validated on this host yet.")
         _write_json(ISAAC_POLICY_SELECTION, {"id": "pretrained/graspgenx-tube", "path": str(path), "isaac_task": request.task})
+    elif request.task == "rack_insert" and _read_json(ROOT / "assets" / "rack_insertion_reference.json", {}).get("physics_verified"):
+        _write_json(ISAAC_POLICY_SELECTION, {"id": "reference/rack-insertion", "path": str(ROOT / "assets" / "rack_insertion_reference.json"), "isaac_task": request.task})
     else:
         _write_json(ISAAC_POLICY_SELECTION, {"id": None, "path": None, "isaac_task": request.task})
     _write_json(ISAAC_TASK_SELECTION, {"task": request.task, "selected_at": time.time()})
@@ -399,7 +407,12 @@ def delete_checkpoint(request: DeleteCheckpointRequest) -> Dict[str, object]:
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     current_task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
-    if request.checkpoint == "pretrained/graspgenx-tube":
+    if request.checkpoint == "reference/rack-insertion":
+        path = ROOT / "assets" / "rack_insertion_reference.json"
+        if current_task != "rack_insert" or not _read_json(path, {}).get("physics_verified"):
+            raise HTTPException(status_code=409, detail="Select the upright rack insertion environment first.")
+        payload = {"id": request.checkpoint, "path": str(path), "isaac_task": "rack_insert", "selected_at": time.time()}
+    elif request.checkpoint == "pretrained/graspgenx-tube":
         path = Path(__file__).resolve().parent / "assets" / "graspgenx_tube.json"
         if current_task != "graspgen" or not _read_json(path, {}).get("physics_verified"):
             raise HTTPException(status_code=409, detail="Select the GraspGenX Tube Pick environment first.")
