@@ -1,0 +1,17 @@
+{
+  "controller": "incubator_loading_ik",
+  "physics_verified": true,
+  "final_pose": [
+    0.4799939692020416,
+    0.37017643451690674,
+    0.29309967160224915,
+    0.703937292098999,
+    0.7050356268882751,
+    0.05411504954099655,
+    -0.06684719771146774
+  ],
+  "peak_height_m": 0.3487803339958191,
+  "stable_seconds": 6.0,
+  "steps": 2612,
+  "limitation": "Analytic simulator-pose contact grasp + Lula IK; automatic door. Not neural or camera-based."
+}

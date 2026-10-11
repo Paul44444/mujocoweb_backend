@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -71,7 +71,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -110,6 +110,9 @@ def playback_mode(actor):
 def load_actor(checkpoint: Path) -> torch.nn.Module:
     """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
     if checkpoint.suffix == ".json":
+        if json.loads(checkpoint.read_text()).get("controller") == "incubator_loading_ik":
+            from isaac_incubator_controller import IncubatorLoadingController
+            return IncubatorLoadingController(env)
         if json.loads(checkpoint.read_text()).get("controller") == "rack_insertion_rgbd":
             from isaac_rack_vision_controller import VisionRackController
             return VisionRackController(env)
@@ -158,6 +161,12 @@ try:
     elif task_mode == "graspgen":
         import isaac_graspgen_task
         effective_task = "Isaac-Franka-GraspGenX-Tube-Pick-Play-v0"
+    elif task_mode == "incubator":
+        torch.set_num_threads(1)
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(limits=1, user_api="blas")
+        import isaac_incubator_task
+        effective_task = "Isaac-Franka-Tube-Incubator-Play-v0"
     elif task_mode == "rack_five":
         import isaac_rack_five_task
         effective_task = "Isaac-Franka-Five-Tube-Rack-Play-v0"
@@ -234,6 +243,7 @@ try:
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (-55.0, 28.0, 1.65)},
+        "incubator": {"target": (0.48, 0.22, 0.25), "orbit": (-90.0, 12.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -892,7 +902,7 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                    if task_mode in {"rack_insert", "rack_vision", "rack_five"}:
+                    if task_mode in {"rack_insert", "rack_vision", "rack_five", "incubator"}:
                         # No pretending a sinusoidal preview is a trained
                         # insertion policy. Hold the arm until teleop or a
                         # separately trained checkpoint is selected.
@@ -956,7 +966,7 @@ try:
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
                     "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
-                    "incubator_door_angle": -math.degrees(float(env.unwrapped.scene["incubator"].data.joint_pos[0, 0])) if task_mode == "rack_five" else None,
+                    "incubator_door_angle": -math.degrees(float(env.unwrapped.scene["incubator"].data.joint_pos[0, 0])) if task_mode in {"rack_five", "incubator"} else None,
                     "end_effector_position": robot.data.body_pos_w[0, hand_body_index].tolist(),
                     "demo_target_position": teleop_target_pose_b[0, :3].tolist() if demo_state["active"] else None,
                     "camera": {
