@@ -47,6 +47,8 @@ class IncubatorLoadingController(RackInsertionController):
         if self.stage == "approach":
             goal[:, 2] += .12
         elif self.stage == "lift":
+            # Extract vertically above the rack AND neighbouring tube tops
+            # before starting the horizontal rotation.
             goal[:, 2] += .18
         elif self.stage == "rotate":
             goal = self.rotation_position.clone()

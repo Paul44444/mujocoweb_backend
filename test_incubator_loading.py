@@ -36,6 +36,9 @@ try:
             torch.tensor([[1.0, -.70, .65]], device=env.unwrapped.device),
             torch.tensor([[.48, .30, .24]], device=env.unwrapped.device))
     controller = IncubatorLoadingController(env)
+    from isaac_rack_five_layout import TUBE_NAMES
+    neighbours = {name: env.unwrapped.scene[name].data.root_pos_w.clone() for name in TUBE_NAMES[1:]}
+    initial_target = env.unwrapped.scene["object"].data.root_pos_w.clone()
     previous = ""
     peak = 0.
     with torch.inference_mode():
@@ -62,7 +65,13 @@ try:
                 assert controller.deposited(), "Tube not stably deposited inside"
                 assert peak > .20, "No physical lift"
                 assert abs(float(env.unwrapped.scene["incubator"].data.joint_pos[0, 0])) < .025
+                for name, initial in neighbours.items():
+                    displacement = torch.linalg.vector_norm(env.unwrapped.scene[name].data.root_pos_w - initial)
+                    assert displacement < .006, f"Neighbour {name} was knocked out of its opening"
                 result = {"controller": "incubator_loading_ik", "physics_verified": True,
+                    "pickup": "front-left cyan tube from five-tube rack",
+                    "initial_pose": initial_target[0].cpu().tolist(),
+                    "neighbours_preserved": True,
                     "final_pose": obj.data.root_pose_w[0].cpu().tolist(), "peak_height_m": peak,
                     "stable_seconds": 6., "steps": step + 1,
                     "limitation": "Analytic simulator-pose contact grasp + Lula IK; automatic door. Not neural or camera-based."}

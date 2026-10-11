@@ -1,17 +1,24 @@
 {
   "controller": "incubator_loading_ik",
   "physics_verified": true,
-  "final_pose": [
-    0.4799939692020416,
-    0.37017643451690674,
-    0.29309967160224915,
-    0.703937292098999,
-    0.7050356268882751,
-    0.05411504954099655,
-    -0.06684719771146774
+  "pickup": "front-left cyan tube from five-tube rack",
+  "initial_pose": [
+    0.4300000071525574,
+    -0.1599999964237213,
+    0.07769999653100967
   ],
-  "peak_height_m": 0.3487803339958191,
+  "neighbours_preserved": true,
+  "final_pose": [
+    0.48052746057510376,
+    0.37004077434539795,
+    0.2930994927883148,
+    0.6947451233863831,
+    0.6963080763816833,
+    0.12309757620096207,
+    -0.13164757192134857
+  ],
+  "peak_height_m": 0.38182157278060913,
   "stable_seconds": 6.0,
-  "steps": 2612,
+  "steps": 2600,
   "limitation": "Analytic simulator-pose contact grasp + Lula IK; automatic door. Not neural or camera-based."
 }

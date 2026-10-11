@@ -135,7 +135,7 @@ def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, obj
     incubator_file = ROOT / "assets" / "incubator_loading_reference.json"
     if isaac_task in {None, "incubator"} and _read_json(incubator_file, {}).get("physics_verified"):
         checkpoints.append({"id": "reference/incubator-loading", "run_id": "reference", "name": "incubator-loading",
-            "label": "Reference · Tube → Incubator · Physical grasp + IK (not neural)",
+            "label": "Reference · Rack → Incubator · Physical grasp + IK (not neural)",
             "modified_at": incubator_file.stat().st_mtime, "deletable": False, "trainable": False,
             "isaac_task": "incubator"})
     if isaac_task == "incubator":
