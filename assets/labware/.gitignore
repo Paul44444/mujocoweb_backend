@@ -1,0 +1,4 @@
+# Owner-supplied third-party model derivatives stay on the simulation host.
+centrifuge_scifi.usdc
+centrifuge_scifi_textures/
+textures/

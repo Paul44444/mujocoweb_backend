@@ -4,6 +4,7 @@ from isaaclab.utils import configclass
 from isaac_rack_five_task import FrankaFiveTubeRackEnvCfg_PLAY
 from isaac_rack_insert_task import RackInsertPPORunnerCfg, SEATED_CENTER_Z
 from isaac_rack_five_layout import HOLES_LOCAL, OCCUPIED_SLOTS, TUBE_NAMES
+from isaac_centrifuge_asset import centrifuge_cfg
 
 INCUBATOR_POSITION = (.48, .43, 0.)
 PICKUP_RACK_POSITION = (.4982855, -.1463427, 0.)
@@ -18,6 +19,7 @@ class FrankaIncubatorEnvCfg_PLAY(FrankaFiveTubeRackEnvCfg_PLAY):
     def __post_init__(self):
         super().__post_init__()
         self.scene.incubator.init_state.pos = INCUBATOR_POSITION
+        self.scene.centrifuge = centrifuge_cfg()
         # Keep the real twelve-hole rack and all five physical tubes. The cyan
         # target occupies the front-left opening; the other four stay behind.
         self.scene.rack_visual.init_state.pos = PICKUP_RACK_POSITION
