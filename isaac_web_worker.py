@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -71,7 +71,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -158,6 +158,9 @@ try:
     elif task_mode == "graspgen":
         import isaac_graspgen_task
         effective_task = "Isaac-Franka-GraspGenX-Tube-Pick-Play-v0"
+    elif task_mode == "rack_five":
+        import isaac_rack_five_task
+        effective_task = "Isaac-Franka-Five-Tube-Rack-Play-v0"
     elif task_mode == "rack_vision":
         torch.set_num_threads(1)
         from threadpoolctl import threadpool_limits
@@ -230,6 +233,7 @@ try:
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
+        "rack_five": {"target": (0.55, 0.12, 0.12), "orbit": (55.0, 32.0, 1.2)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -884,7 +888,7 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                    if task_mode in {"rack_insert", "rack_vision"}:
+                    if task_mode in {"rack_insert", "rack_vision", "rack_five"}:
                         # No pretending a sinusoidal preview is a trained
                         # insertion policy. Hold the arm until teleop or a
                         # separately trained checkpoint is selected.
