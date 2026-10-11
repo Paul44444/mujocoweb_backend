@@ -233,7 +233,7 @@ try:
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
-        "rack_five": {"target": (0.55, 0.12, 0.12), "orbit": (55.0, 32.0, 1.2)},
+        "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (55.0, 28.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -620,6 +620,10 @@ try:
                     camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
                     camera_target.copy_(default_camera_target)
                     camera_changed = True
+                elif command_type == "incubator_door" and task_mode == "rack_five":
+                    door = env.unwrapped.scene["incubator"]
+                    door.set_joint_position_target(torch.full((1, 1), -math.radians(110.) if command.get("open") is True else 0., device=env.unwrapped.device))
+                    print("Incubator door opening" if command.get("open") is True else "Incubator door closing", flush=True)
                 elif command_type == "scene_spawn":
                     spawn_web_asset(command)
                 elif command_type == "scene_replace":
@@ -952,6 +956,7 @@ try:
                     "vision_estimated_position": policy_observations[0, 18:21].tolist() if task_mode == "vision" and policy_observations is not None else None,
                     "object_position": env.unwrapped.scene["object"].data.root_pos_w[0].tolist(),
                     "object_velocity": env.unwrapped.scene["object"].data.root_vel_w[0].tolist(),
+                    "incubator_door_angle": -math.degrees(float(env.unwrapped.scene["incubator"].data.joint_pos[0, 0])) if task_mode == "rack_five" else None,
                     "end_effector_position": robot.data.body_pos_w[0, hand_body_index].tolist(),
                     "demo_target_position": teleop_target_pose_b[0, :3].tolist() if demo_state["active"] else None,
                     "camera": {

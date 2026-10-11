@@ -38,6 +38,30 @@ try:
         _, reward, _, _, _ = env.step(action)
         assert torch.isfinite(reward).all()
     check()
+    incubator = base.scene["incubator"]
+    assert incubator.joint_names == ["door_hinge"], incubator.joint_names
+    incubator.set_joint_position_target(torch.full((1, 1), -1.919862, device=base.device))
+    for _ in range(250):
+        env.step(action)
+    angle = float(incubator.data.joint_pos[0, 0])
+    print("INCUBATOR_OPEN", angle, incubator.data.root_pos_w.cpu().tolist(), flush=True)
+    assert abs(angle + 1.919862) < .04, angle
+    # A tube can actually rest INSIDE the cavity on the lower shelf.
+    obj = base.scene["object"]
+    pose = obj.data.root_pose_w.clone()
+    pose[:, :3] = pose.new_tensor([[.48, .50, .334]])
+    obj.write_root_pose_to_sim(pose)
+    obj.write_root_velocity_to_sim(torch.zeros((1, 6), device=base.device))
+    for _ in range(150):
+        env.step(action)
+    print("INCUBATOR_SHELF_TUBE", obj.data.root_pos_w.cpu().tolist(), flush=True)
+    assert abs(float(obj.data.root_pos_w[0, 2]) - .3316) < .004
+    assert torch.linalg.vector_norm(obj.data.root_pos_w[0, :2] - pose[0, :2]) < .003
+    incubator.set_joint_position_target(torch.zeros((1, 1), device=base.device))
+    for _ in range(250):
+        env.step(action)
+    assert abs(float(incubator.data.joint_pos[0, 0])) < .04
+    print("INCUBATOR_CLOSE_PASS", flush=True)
     # Move every tube out of its hole, then prove reset restores ALL objects.
     for name in TUBE_NAMES:
         obj = base.scene[name]
@@ -48,7 +72,12 @@ try:
     for _ in range(150):
         env.step(action)
     check()
+    assert abs(float(incubator.data.joint_pos[0, 0])) < .01
     print("FIVE_TUBE_PHYSICS_PASS", flush=True)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 finally:
     if env is not None:
         env.close()
