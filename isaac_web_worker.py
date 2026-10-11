@@ -243,7 +243,7 @@ try:
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (-55.0, 28.0, 1.65)},
-        "incubator": {"target": (0.48, 0.22, 0.25), "orbit": (-90.0, 12.0, 1.65)},
+        "incubator": {"target": (0.48, 0.22, 0.20), "orbit": (-90.0, 12.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
