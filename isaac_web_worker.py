@@ -233,7 +233,7 @@ try:
         "labware": {"target": (0.51, 0.04, 0.24), "orbit": (55.0, 24.0, 1.65)},
         "rack_insert": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
-        "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (55.0, 28.0, 1.65)},
+        "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (-55.0, 28.0, 1.65)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
