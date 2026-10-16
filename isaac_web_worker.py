@@ -253,7 +253,7 @@ try:
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (-55.0, 28.0, 1.65)},
         "incubator": {"target": (0.48, 0.08, 0.20), "orbit": (-90.0, 16.0, 1.90)},
-        "cell_lab": {"target": (0.0, 1.0, 0.40), "orbit": (-65.0, 20.0, 5.0)},
+        "cell_lab": {"target": (0.0, 1.0, 0.40), "orbit": (-65.0, 20.0, 7.0)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
