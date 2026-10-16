@@ -50,13 +50,13 @@ class StartTrainingRequest(BaseModel):
     seed: int = Field(default=123, ge=0, le=2_147_483_647)
     num_envs: Literal[16, 32, 64, 128, 256, 512] = 256
     resume_checkpoint: Optional[str] = Field(default=None, max_length=160)
-    isaac_task: Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"] = "state"
+    isaac_task: Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab", "cell_lab_incubator"] = "state"
     demo_ids: List[str] = Field(default_factory=list, max_length=8)
     bc_epochs: int = Field(default=200, ge=1, le=2000)
 
 
 class SelectIsaacTaskRequest(BaseModel):
-    task: Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"]
+    task: Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab", "cell_lab_incubator"]
 
 
 class SelectCheckpointRequest(BaseModel):
@@ -132,6 +132,13 @@ def _run_display_name(run_directory: Path, config: Dict[str, object]) -> str:
 
 def _checkpoint_payloads(isaac_task: Optional[str] = None) -> List[Dict[str, object]]:
     checkpoints = []
+    lab_incubator = ROOT / "assets" / "cell_lab_incubator_reference.json"
+    if isaac_task in {None, "cell_lab_incubator"} and _read_json(lab_incubator, {}).get("physics_verified"):
+        checkpoints.append({"id": "reference/cell-lab-incubator", "run_id": "reference", "name": "cell-lab-incubator",
+            "label": "Cell culture lab · Tube → Incubator · Physical grasp + IK (not neural)",
+            "modified_at": lab_incubator.stat().st_mtime, "deletable": False, "trainable": False, "isaac_task": "cell_lab_incubator"})
+    if isaac_task == "cell_lab_incubator":
+        return checkpoints
     cell_file = ROOT / "assets" / "cell_lab_reference.json"
     if isaac_task in {None, "cell_lab"} and _read_json(cell_file, {}).get("physics_verified"):
         checkpoints.append({"id": "reference/cell-lab-cube", "run_id": "reference", "name": "cell-lab-cube",
@@ -307,7 +314,7 @@ def _active_run() -> Dict[str, object] | None:
 @router.get("/runs")
 def list_training_runs(
     engine: Optional[Literal["mujoco", "isaaclab"]] = Query(default=None),
-    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab", "cell_lab_incubator"]] = Query(default=None),
 ) -> Dict[str, object]:
     RUNS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     runs = [_run_payload(path) for path in sorted(RUNS_DIRECTORY.iterdir(), reverse=True) if path.is_dir()]
@@ -331,7 +338,7 @@ def get_training_run(run_id: str) -> Dict[str, object]:
 
 @router.get("/checkpoints")
 def list_checkpoints(
-    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"]] = Query(default=None),
+    isaac_task: Optional[Literal["state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab", "cell_lab_incubator"]] = Query(default=None),
 ) -> Dict[str, object]:
     selected = _read_json(ISAAC_POLICY_SELECTION, {}).get("id")
     return {"checkpoints": _checkpoint_payloads(isaac_task), "selected": selected}
@@ -350,13 +357,16 @@ def select_isaac_task(request: SelectIsaacTaskRequest, background_tasks: Backgro
     current = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
     if current == request.task and _read_json(ISAAC_STATUS_PATH, {}).get("status") == "ready":
         return {"task": request.task, "status": "ready", "restarting": False}
-    if request.task == "cell_lab":
+    if request.task in {"cell_lab", "cell_lab_incubator"}:
         models = Path(os.environ.get("CELL_LAB_MODELS", "/home/paul/Desktop/3Dmodels"))
         if not (models / "laborszene/laborszene_cfg.py").is_file():
             raise HTTPException(status_code=503, detail="Cell laboratory assets are not installed on this host.")
-        path = ROOT / "assets" / "cell_lab_reference.json"
+        path = ROOT / "assets" / ("cell_lab_incubator_reference.json" if request.task == "cell_lab_incubator" else "cell_lab_reference.json")
         verified = _read_json(path, {}).get("physics_verified")
-        _write_json(ISAAC_POLICY_SELECTION, {"id": "reference/cell-lab-cube" if verified else None,
+        reference_id = "reference/cell-lab-incubator" if request.task == "cell_lab_incubator" else "reference/cell-lab-cube"
+        if request.task == "cell_lab_incubator" and not verified:
+            raise HTTPException(status_code=503, detail="Laboratory incubator task has not passed its physical loading test yet.")
+        _write_json(ISAAC_POLICY_SELECTION, {"id": reference_id if verified else None,
             "path": str(path) if verified else None, "isaac_task": request.task})
     elif request.task == "incubator":
         path = ROOT / "assets" / "incubator_loading_reference.json"
@@ -450,7 +460,12 @@ def delete_checkpoint(request: DeleteCheckpointRequest) -> Dict[str, object]:
 def select_checkpoint(request: SelectCheckpointRequest, background_tasks: BackgroundTasks) -> Dict[str, object]:
     ISAAC_OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     current_task = _read_json(ISAAC_TASK_SELECTION, {}).get("task", "state")
-    if request.checkpoint == "reference/cell-lab-cube":
+    if request.checkpoint == "reference/cell-lab-incubator":
+        path = ROOT / "assets" / "cell_lab_incubator_reference.json"
+        if current_task != "cell_lab_incubator" or not _read_json(path, {}).get("physics_verified"):
+            raise HTTPException(status_code=409, detail="Select the validated laboratory incubator task first.")
+        payload = {"id": request.checkpoint, "path": str(path), "isaac_task": "cell_lab_incubator", "selected_at": time.time()}
+    elif request.checkpoint == "reference/cell-lab-cube":
         path = ROOT / "assets" / "cell_lab_reference.json"
         if current_task != "cell_lab" or not _read_json(path, {}).get("physics_verified"):
             raise HTTPException(status_code=409, detail="Select the validated cell laboratory first.")
@@ -529,7 +544,7 @@ def select_checkpoint(request: SelectCheckpointRequest, background_tasks: Backgr
 @router.post("/start")
 def start_training(request: StartTrainingRequest) -> Dict[str, object]:
     with manager_lock:
-        if request.engine == "isaaclab" and request.isaac_task in {"rack_five", "incubator", "cell_lab"}:
+        if request.engine == "isaaclab" and request.isaac_task in {"rack_five", "incubator", "cell_lab", "cell_lab_incubator"}:
             raise HTTPException(status_code=422, detail="This scene/reference is playback-only; no PPO learning objective is configured yet.")
         if request.engine == "isaaclab" and request.isaac_task in {"graspgen", "rack_vision"}:
             raise HTTPException(status_code=422, detail="This reference controller is playback-only, not a PPO actor. Select the original lift or upright insertion task for training.")

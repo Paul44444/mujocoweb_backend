@@ -1,0 +1,12 @@
+{
+  "controller": "cell_lab_incubator_ik",
+  "physics_verified": true,
+  "task": "cell_lab_incubator",
+  "both_doors_closed": true,
+  "neighbours_preserved": true,
+  "final_pose": [0.4355730414390564, 0.37983107566833496, 0.38824793696403503, 0.7026379704475403, 0.5416325926780701, -0.45457616448402405, -0.07933783531188965],
+  "peak_height_m": 0.4324100613594055,
+  "stable_seconds": 6.0,
+  "steps": 3291,
+  "limitation": "Simulator-state contact grasp + Lula IK; automatic doors. Not neural or image-based."
+}

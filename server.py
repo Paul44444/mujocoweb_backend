@@ -236,7 +236,10 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
 
             command_type = command.get("type")
             try:
-                if command_type == "incubator_door" and _read_isaac_status_task() == "rack_five":
+                if command_type == "incubator_inspect" and _read_isaac_status_task() == "cell_lab_incubator":
+                    if type(command.get("open")) is bool:
+                        await loop.run_in_executor(None, publish_command, {"type": command_type, "open": command["open"]})
+                elif command_type == "incubator_door" and _read_isaac_status_task() == "rack_five":
                     if type(command.get("open")) is bool:
                         await loop.run_in_executor(None, publish_command, {"type": command_type, "open": command["open"]})
                 elif command_type in {"camera_reset", "reset_episode"}:
