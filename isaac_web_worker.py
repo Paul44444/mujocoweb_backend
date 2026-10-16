@@ -26,7 +26,7 @@ parser.add_argument("--jpeg-quality", type=int, default=86)
 parser.add_argument("--max-fps", type=float, default=20.0)
 parser.add_argument("--training-max-fps", type=float, default=5.0)
 parser.add_argument("--desktop", action="store_true", help="Open Isaac Sim as a local desktop window")
-parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator"))
+parser.add_argument("--task-mode", choices=("state", "vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"))
 parser.add_argument("--selection-directory")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -71,7 +71,7 @@ task_mode = args.task_mode or "state"
 if args.task_mode is None:
     try:
         selected_task = json.loads(task_selection_path.read_text(encoding="utf-8"))
-        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator"}:
+        if selected_task.get("task") in {"vision", "labware_lift", "labware", "graspgen", "rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"}:
             task_mode = selected_task["task"]
     except (OSError, ValueError, TypeError):
         pass
@@ -110,6 +110,9 @@ def playback_mode(actor):
 def load_actor(checkpoint: Path) -> torch.nn.Module:
     """Load only the compact playback actor, avoiding the training-time RSL wrapper."""
     if checkpoint.suffix == ".json":
+        if json.loads(checkpoint.read_text()).get("controller") == "cell_lab_cube_ik":
+            from isaac_cell_lab_controller import CellLabCubeController
+            return CellLabCubeController(env)
         if json.loads(checkpoint.read_text()).get("controller") == "incubator_loading_ik":
             from isaac_incubator_controller import IncubatorLoadingController
             return IncubatorLoadingController(env)
@@ -156,7 +159,13 @@ atomic_json(status_path, {"status": "starting", "task": task_mode})
 env = None
 started_at = time.monotonic()
 try:
-    if task_mode == "vision":
+    if task_mode == "cell_lab":
+        torch.set_num_threads(1)
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(limits=1, user_api="blas")
+        import isaac_cell_lab_task
+        effective_task = "Isaac-Franka-Cell-Lab-Play-v0"
+    elif task_mode == "vision":
         effective_task = "Isaac-Lift-Cube-Franka-Vision-Play-v0"
     elif task_mode == "graspgen":
         import isaac_graspgen_task
@@ -244,6 +253,7 @@ try:
         "rack_vision": {"target": (0.51, 0.00, 0.18), "orbit": (55.0, 24.0, 1.45)},
         "rack_five": {"target": (0.50, 0.28, 0.25), "orbit": (-55.0, 28.0, 1.65)},
         "incubator": {"target": (0.48, 0.08, 0.20), "orbit": (-90.0, 16.0, 1.90)},
+        "cell_lab": {"target": (0.0, 1.0, 0.40), "orbit": (-65.0, 20.0, 5.0)},
     }
     camera_preset = camera_presets.get(task_mode, camera_presets["state"])
     default_camera_target = torch.tensor(
@@ -615,7 +625,8 @@ try:
                         + up * float(command["delta_y"]) * scale
                     )
                     target = np.asarray(camera_target[0].tolist()) + translation
-                    target = np.clip(target, (-1.5, -2.0, -0.5), (2.5, 2.0, 2.0))
+                    target = np.clip(target, (-4., -3., -1.) if task_mode == "cell_lab" else (-1.5, -2.0, -0.5),
+                        (4., 4., 3.) if task_mode == "cell_lab" else (2.5, 2.0, 2.0))
                     camera_target[0] = torch.as_tensor(
                         target, dtype=torch.float32, device=env.unwrapped.device
                     )
@@ -623,12 +634,16 @@ try:
                 elif command_type == "camera_zoom":
                     camera_state["distance"] = max(
                         0.65,
-                        min(5.0, camera_state["distance"] * (1.12 ** float(command["delta"]))),
+                        min(8.0 if task_mode == "cell_lab" else 5.0, camera_state["distance"] * (1.12 ** float(command["delta"]))),
                     )
                     camera_changed = True
                 elif command_type == "camera_reset":
-                    camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
-                    camera_target.copy_(default_camera_target)
+                    if task_mode == "cell_lab" and command.get("view") == "workbench":
+                        camera_state.update(azimuth=-60., elevation=25., distance=2.25)
+                        camera_target[0] = camera_target.new_tensor([.25, .15, .22])
+                    else:
+                        camera_state["azimuth"], camera_state["elevation"], camera_state["distance"] = default_camera
+                        camera_target.copy_(default_camera_target)
                     camera_changed = True
                 elif command_type == "incubator_door" and task_mode == "rack_five":
                     door = env.unwrapped.scene["incubator"]
@@ -902,7 +917,7 @@ try:
                     actions[:, 3] = 0.18 * math.sin(phase * 0.51)
                     actions[:, 5] = 0.12 * math.cos(phase * 0.67)
                     actions[:, 7] = 1.0 if math.sin(phase * 0.35) > 0 else -1.0
-                    if task_mode in {"rack_insert", "rack_vision", "rack_five", "incubator"}:
+                    if task_mode in {"rack_insert", "rack_vision", "rack_five", "incubator", "cell_lab"}:
                         # No pretending a sinusoidal preview is a trained
                         # insertion policy. Hold the arm until teleop or a
                         # separately trained checkpoint is selected.

@@ -1,0 +1,9 @@
+{
+  "controller": "cell_lab_cube_ik",
+  "physics_verified": true,
+  "task": "cell_lab",
+  "articulated_furniture": 10,
+  "cube_height_m": 0.1994645744562149,
+  "steps": 686,
+  "limitation": "Simulator-state Lula IK reference, not neural; scenery props static."
+}

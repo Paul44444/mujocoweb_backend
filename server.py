@@ -241,6 +241,8 @@ async def stream_isaac_simulation(websocket: WebSocket) -> None:
                         await loop.run_in_executor(None, publish_command, {"type": command_type, "open": command["open"]})
                 elif command_type in {"camera_reset", "reset_episode"}:
                     reset_command = {"type": command_type}
+                    if command_type == "camera_reset" and command.get("view") in {"overview", "workbench"}:
+                        reset_command["view"] = command["view"]
                     if command_type == "reset_episode":
                         reset_command.update(position_variation=max(0., min(.05, float(command.get("position_variation", 0.)))), yaw_variation=max(0., min(30., float(command.get("yaw_variation", 0.)))))
                     await loop.run_in_executor(
